@@ -19,6 +19,7 @@ fastrand = { workspace = true }
 urlencoding = { workspace = true }
 quick-xml = { workspace = true }
 regex = { workspace = true }
+lettre = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

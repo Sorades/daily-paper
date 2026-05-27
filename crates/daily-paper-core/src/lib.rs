@@ -1,9 +1,12 @@
 pub mod config;
+pub mod deliver;
 pub mod embedding;
 pub mod error;
 pub mod metadata;
 pub mod models;
 pub mod pdf;
+pub mod reader;
+pub mod render;
 pub mod rerank;
 pub mod source;
 pub mod state;
