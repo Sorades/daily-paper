@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 /// Selection of top-N papers for deep reading.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadSelection {
     pub selection_id: String,
     pub rerank_cache_key: String,

@@ -243,8 +243,13 @@ name = "daily-paper"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "daily-paper-core",
+ "fastrand",
+ "hex",
+ "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
