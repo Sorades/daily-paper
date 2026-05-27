@@ -14,7 +14,7 @@ pub struct ArxivClient {
     client: Client,
     categories: Vec<String>,
     include_cross_list: bool,
-    max_results: usize,
+    _max_results: usize,
 }
 
 impl ArxivClient {
@@ -23,7 +23,7 @@ impl ArxivClient {
             client: Client::new(),
             categories,
             include_cross_list,
-            max_results: 2000,
+            _max_results: 2000,
         }
     }
 
@@ -162,7 +162,7 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
 
     let mut entries = Vec::new();
     let mut current_entry: Option<serde_json::Map<String, serde_json::Value>> = None;
-    let mut current_tag = String::new();
+    let mut _current_tag = String::new();
     let mut current_text = String::new();
     let mut in_entry = false;
     let mut authors: Vec<serde_json::Value> = Vec::new();
@@ -186,7 +186,7 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                         author_name = String::new();
                     }
                     _ if in_entry => {
-                        current_tag = tag;
+                        _current_tag = tag;
                         current_text = String::new();
                     }
                     _ => {}

@@ -1,6 +1,10 @@
 pub mod config;
+pub mod embedding;
 pub mod error;
+pub mod metadata;
 pub mod models;
+pub mod pdf;
+pub mod rerank;
 pub mod source;
 pub mod state;
 pub mod zotero;

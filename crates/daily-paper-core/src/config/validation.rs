@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use super::raw::RawConfig;
 
 /// Validate required fields in the raw config.
-pub fn validate(raw: &RawConfig) -> Result<()> {
+pub fn _validate(raw: &RawConfig) -> Result<()> {
     if raw.zotero.user_id.is_empty() {
         return Err(Error::Config("zotero.user_id is required".into()));
     }
