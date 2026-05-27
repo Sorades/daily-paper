@@ -1,0 +1,166 @@
+use super::raw::RawConfig;
+use crate::error::Result;
+
+#[derive(Debug, Clone)]
+pub struct ResolvedConfig {
+    pub zotero: ResolvedZoteroConfig,
+    pub sources: Vec<ResolvedSourceConfig>,
+    pub embedding: ResolvedEmbeddingConfig,
+    pub reranker: ResolvedRerankerConfig,
+    pub reader: ResolvedReaderConfig,
+    pub pdf: ResolvedPdfConfig,
+    pub email: ResolvedEmailConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedZoteroConfig {
+    pub user_id: String,
+    pub api_key: String,
+    pub max_snapshot_age_hours: u64,
+    pub filters: Vec<ResolvedZoteroFilter>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedZoteroFilter {
+    pub path: String,
+    pub weight: f32,
+    pub exclude: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedSourceConfig {
+    pub kind: String,
+    pub categories: Vec<String>,
+    pub include_cross_list: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedEmbeddingConfig {
+    pub kind: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub batch_size: usize,
+    pub timeout_secs: u64,
+    pub max_retries: u32,
+    pub max_concurrency: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedRerankerConfig {
+    pub kind: String,
+    pub top_k_library_matches: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedReaderConfig {
+    pub kind: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub top_n: usize,
+    pub language: String,
+    pub require_full_text: bool,
+    pub on_read_failure: String,
+    pub timeout_secs: u64,
+    pub max_retries: u32,
+    pub max_concurrency: usize,
+    pub max_input_tokens: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedPdfConfig {
+    pub extractor: String,
+    pub timeout_secs: u64,
+    pub max_pdf_mb: u64,
+    pub max_text_chars: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedEmailConfig {
+    pub smtp_server: String,
+    pub smtp_port: u16,
+    pub sender: String,
+    pub receiver: String,
+    pub password: String,
+}
+
+fn resolve_env(var_name: &str) -> Result<String> {
+    std::env::var(var_name).map_err(|_| {
+        crate::error::Error::Config(format!("environment variable '{}' not set", var_name))
+    })
+}
+
+impl ResolvedConfig {
+    pub fn from_raw(raw: &RawConfig) -> Result<Self> {
+        Ok(Self {
+            zotero: ResolvedZoteroConfig {
+                user_id: raw.zotero.user_id.clone(),
+                api_key: resolve_env(&raw.zotero.api_key_env)?,
+                max_snapshot_age_hours: raw.zotero.max_snapshot_age_hours.unwrap_or(168),
+                filters: raw
+                    .zotero
+                    .filters
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|f| ResolvedZoteroFilter {
+                        path: f.path.clone(),
+                        weight: f.weight.unwrap_or(1.0),
+                        exclude: f.exclude.unwrap_or(false),
+                    })
+                    .collect(),
+            },
+            sources: raw
+                .sources
+                .iter()
+                .map(|s| ResolvedSourceConfig {
+                    kind: s.kind.clone(),
+                    categories: s.categories.clone(),
+                    include_cross_list: s.include_cross_list.unwrap_or(false),
+                })
+                .collect(),
+            embedding: ResolvedEmbeddingConfig {
+                kind: raw.embedding.kind.clone(),
+                base_url: raw.embedding.base_url.clone(),
+                api_key: resolve_env(&raw.embedding.api_key_env)?,
+                model: raw.embedding.model.clone(),
+                batch_size: raw.embedding.batch_size.unwrap_or(64),
+                timeout_secs: raw.embedding.timeout_secs.unwrap_or(60),
+                max_retries: raw.embedding.max_retries.unwrap_or(5),
+                max_concurrency: raw.embedding.max_concurrency.unwrap_or(4),
+            },
+            reranker: ResolvedRerankerConfig {
+                kind: raw.reranker.kind.clone(),
+                top_k_library_matches: raw.reranker.top_k_library_matches.unwrap_or(20),
+            },
+            reader: ResolvedReaderConfig {
+                kind: raw.reader.kind.clone(),
+                base_url: raw.reader.base_url.clone(),
+                api_key: resolve_env(&raw.reader.api_key_env)?,
+                model: raw.reader.model.clone(),
+                top_n: raw.reader.top_n.unwrap_or(10),
+                language: raw.reader.language.clone().unwrap_or_else(|| "zh-CN".into()),
+                require_full_text: raw.reader.require_full_text.unwrap_or(true),
+                on_read_failure: raw.reader.on_read_failure.clone().unwrap_or_else(|| "block".into()),
+                timeout_secs: raw.reader.timeout_secs.unwrap_or(120),
+                max_retries: raw.reader.max_retries.unwrap_or(5),
+                max_concurrency: raw.reader.max_concurrency.unwrap_or(2),
+                max_input_tokens: raw.reader.max_input_tokens.unwrap_or(60000),
+            },
+            pdf: ResolvedPdfConfig {
+                extractor: raw.pdf.extractor.clone(),
+                timeout_secs: raw.pdf.timeout_secs.unwrap_or(60),
+                max_pdf_mb: raw.pdf.max_pdf_mb.unwrap_or(50),
+                max_text_chars: raw.pdf.max_text_chars.unwrap_or(300000),
+            },
+            email: ResolvedEmailConfig {
+                smtp_server: raw.email.smtp_server.clone(),
+                smtp_port: raw.email.smtp_port,
+                sender: raw.email.sender.clone(),
+                receiver: raw.email.receiver.clone(),
+                password: resolve_env(&raw.email.password_env)?,
+            },
+        })
+    }
+}

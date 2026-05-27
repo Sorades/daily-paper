@@ -1,0 +1,74 @@
+# Daily Paper 配置示例
+#
+# 默认配置文件位置：
+#   Linux:   ~/.config/daily-paper/config.toml
+#   macOS:   ~/Library/Application Support/daily-paper/config.toml
+#   Windows: %APPDATA%/daily-paper/config.toml
+#
+# 可通过 --config <path> 覆盖
+
+[state]
+# 可选。不设置时使用系统 app data 目录。
+# dir = "/path/to/daily-paper-state"
+
+[state.lock]
+stale_after_minutes = 360
+
+[zotero]
+user_id = "123456"
+api_key_env = "ZOTERO_API_KEY"
+max_snapshot_age_hours = 168
+
+[[zotero.filters]]
+path = "active-projects/**"
+weight = 2.0
+
+[[zotero.filters]]
+path = "ignored/**"
+exclude = true
+
+[[sources]]
+kind = "arxiv"
+categories = ["cs.AI", "cs.CL", "cs.LG"]
+include_cross_list = false
+
+[embedding]
+kind = "openai-compatible"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "text-embedding-3-small"
+batch_size = 64
+timeout_secs = 60
+max_retries = 5
+max_concurrency = 4
+
+[reranker]
+kind = "embedding_similarity"
+top_k_library_matches = 20
+
+[reader]
+kind = "openai-compatible"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o-mini"
+top_n = 10
+language = "zh-CN"
+require_full_text = true
+on_read_failure = "block"
+timeout_secs = 120
+max_retries = 5
+max_concurrency = 2
+max_input_tokens = 60000
+
+[pdf]
+extractor = "pdftotext"
+timeout_secs = 60
+max_pdf_mb = 50
+max_text_chars = 300000
+
+[email]
+smtp_server = "smtp.example.com"
+smtp_port = 465
+sender = "sender@example.com"
+receiver = "receiver@example.com"
+password_env = "SMTP_PASSWORD"

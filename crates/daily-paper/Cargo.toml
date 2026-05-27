@@ -1,0 +1,16 @@
+[package]
+name = "daily-paper"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "daily-paper"
+path = "src/main.rs"
+
+[dependencies]
+daily-paper-core = { path = "../daily-paper-core" }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
