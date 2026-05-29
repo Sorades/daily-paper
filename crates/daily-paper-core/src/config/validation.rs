@@ -12,14 +12,13 @@ pub fn _validate(raw: &RawConfig) -> Result<()> {
     if raw.sources.is_empty() {
         return Err(Error::Config("at least one source is required".into()));
     }
-    if raw.embedding.base_url.is_empty() {
-        return Err(Error::Config("embedding.base_url is required".into()));
-    }
-    if raw.embedding.api_key_env.is_empty() {
-        return Err(Error::Config("embedding.api_key_env is required".into()));
-    }
-    if raw.embedding.model.is_empty() {
-        return Err(Error::Config("embedding.model is required".into()));
+    if raw.embedding.kind != "fastembed" {
+        if raw.embedding.base_url.as_deref().unwrap_or("").is_empty() {
+            return Err(Error::Config("embedding.base_url is required for non-local embedding".into()));
+        }
+        if raw.embedding.api_key_env.as_deref().unwrap_or("").is_empty() {
+            return Err(Error::Config("embedding.api_key_env is required for non-local embedding".into()));
+        }
     }
     if raw.reader.base_url.is_empty() {
         return Err(Error::Config("reader.base_url is required".into()));

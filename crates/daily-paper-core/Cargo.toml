@@ -20,6 +20,7 @@ urlencoding = { workspace = true }
 quick-xml = { workspace = true }
 regex = { workspace = true }
 lettre = { workspace = true }
+fastembed = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

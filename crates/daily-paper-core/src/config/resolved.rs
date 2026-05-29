@@ -37,8 +37,8 @@ pub struct ResolvedSourceConfig {
 #[derive(Debug, Clone)]
 pub struct ResolvedEmbeddingConfig {
     pub kind: String,
-    pub base_url: String,
-    pub api_key: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
     pub model: String,
     pub batch_size: usize,
     pub timeout_secs: u64,
@@ -123,8 +123,16 @@ impl ResolvedConfig {
             embedding: ResolvedEmbeddingConfig {
                 kind: raw.embedding.kind.clone(),
                 base_url: raw.embedding.base_url.clone(),
-                api_key: resolve_env(&raw.embedding.api_key_env)?,
-                model: raw.embedding.model.clone(),
+                api_key: raw.embedding.api_key_env.as_deref().and_then(|env| {
+                    std::env::var(env).ok()
+                }),
+                model: raw.embedding.model.clone().unwrap_or_else(|| {
+                    if raw.embedding.kind == "fastembed" {
+                        "BAAI/bge-small-en-v1.5".to_string()
+                    } else {
+                        "text-embedding-3-small".to_string()
+                    }
+                }),
                 batch_size: raw.embedding.batch_size.unwrap_or(64),
                 timeout_secs: raw.embedding.timeout_secs.unwrap_or(60),
                 max_retries: raw.embedding.max_retries.unwrap_or(5),

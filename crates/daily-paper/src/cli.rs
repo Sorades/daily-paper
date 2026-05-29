@@ -48,6 +48,10 @@ pub struct RunArgs {
     /// Force send, even if report was already sent
     #[arg(long)]
     pub force_send: bool,
+
+    /// Limit number of candidates to process (for testing)
+    #[arg(long)]
+    pub max_candidates: Option<usize>,
 }
 
 #[derive(Parser)]

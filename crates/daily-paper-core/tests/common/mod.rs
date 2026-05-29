@@ -148,8 +148,8 @@ pub fn make_test_config(mock_server_url: &str) -> ResolvedConfig {
         }],
         embedding: ResolvedEmbeddingConfig {
             kind: "openai-compatible".to_string(),
-            base_url: format!("{}/v1", mock_server_url),
-            api_key: "test_key".to_string(),
+            base_url: Some(format!("{}/v1", mock_server_url)),
+            api_key: Some("test_key".to_string()),
             model: "test-model".to_string(),
             batch_size: 64,
             timeout_secs: 10,

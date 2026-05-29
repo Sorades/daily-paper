@@ -48,9 +48,9 @@ pub struct SourceConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmbeddingConfig {
     pub kind: String,
-    pub base_url: String,
-    pub api_key_env: String,
-    pub model: String,
+    pub base_url: Option<String>,
+    pub api_key_env: Option<String>,
+    pub model: Option<String>,
     pub batch_size: Option<usize>,
     pub timeout_secs: Option<u64>,
     pub max_retries: Option<u32>,
