@@ -1,0 +1,48 @@
+[
+  {
+    "key": "ITEM001",
+    "version": 42,
+    "data": {
+      "key": "ITEM001",
+      "version": 42,
+      "itemType": "journalArticle",
+      "title": "Attention Is All You Need",
+      "abstractNote": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+      "date": "2017-06-12",
+      "DOI": "10.48550/arxiv.1706.03762",
+      "url": "https://arxiv.org/abs/1706.03762",
+      "creators": [
+        {"creatorType": "author", "firstName": "Ashish", "lastName": "Vaswani"},
+        {"creatorType": "author", "firstName": "Noam", "lastName": "Shazeer"}
+      ],
+      "tags": [{"tag": "transformers"}, {"tag": "attention"}],
+      "collections": ["COL1"],
+      "deleted": false,
+      "dateAdded": "2024-01-15T10:00:00Z",
+      "dateModified": "2024-01-16T10:00:00Z"
+    }
+  },
+  {
+    "key": "ITEM002",
+    "version": 10,
+    "data": {
+      "key": "ITEM002",
+      "version": 10,
+      "itemType": "journalArticle",
+      "title": "BERT: Pre-training of Deep Bidirectional Transformers",
+      "abstractNote": "We introduce a new language representation model called BERT.",
+      "date": "2018-10-11",
+      "DOI": "10.48550/arxiv.1810.04805",
+      "url": "https://arxiv.org/abs/1810.04805",
+      "creators": [
+        {"creatorType": "author", "firstName": "Jacob", "lastName": "Devlin"},
+        {"creatorType": "author", "firstName": "Ming-Wei", "lastName": "Chang"}
+      ],
+      "tags": [{"tag": "nlp"}, {"tag": "bert"}],
+      "collections": ["COL1", "COL2"],
+      "deleted": false,
+      "dateAdded": "2024-02-01T10:00:00Z",
+      "dateModified": "2024-02-02T10:00:00Z"
+    }
+  }
+]

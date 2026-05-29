@@ -1,0 +1,14 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "这篇论文提出了一种新的注意力机制，显著提高了神经网络的效率。实验结果表明，该方法在多个基准测试上取得了最优性能。"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1500,
+    "completion_tokens": 200,
+    "total_tokens": 1700
+  }
+}

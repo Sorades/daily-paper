@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2301.12345v1</id>
+    <title>Test Paper: Attention Mechanisms</title>
+    <summary>We propose a novel attention mechanism for neural networks.</summary>
+    <author><name>Alice Smith</name></author>
+    <author><name>Bob Jones</name></author>
+    <published>2023-01-30T00:00:00Z</published>
+    <updated>2023-01-31T00:00:00Z</updated>
+    <category term="cs.AI"/>
+    <category term="cs.LG"/>
+    <link href="http://arxiv.org/abs/2301.12345v1" rel="alternate"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2301.12345v1" rel="related"/>
+    <doi>10.48550/arxiv.2301.12345</doi>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2301.67890v2</id>
+    <title>Test Paper: Efficient Transformers</title>
+    <summary>We present an efficient variant of the Transformer architecture.</summary>
+    <author><name>Charlie Brown</name></author>
+    <published>2023-01-30T00:00:00Z</published>
+    <updated>2023-02-01T00:00:00Z</updated>
+    <category term="cs.CL"/>
+    <link href="http://arxiv.org/abs/2301.67890v2" rel="alternate"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2301.67890v2" rel="related"/>
+  </entry>
+</feed>

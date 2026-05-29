@@ -8,6 +8,7 @@ const ZOTERO_API_BASE: &str = "https://api.zotero.org";
 
 pub struct ZoteroClient {
     client: Client,
+    base_url: String,
     user_id: String,
     api_key: String,
     max_retries: u32,
@@ -17,14 +18,25 @@ impl ZoteroClient {
     pub fn new(user_id: String, api_key: String) -> Self {
         Self {
             client: Client::new(),
+            base_url: ZOTERO_API_BASE.to_string(),
             user_id,
             api_key,
             max_retries: 3,
         }
     }
 
-    fn base_url(&self) -> String {
-        format!("{}/users/{}", ZOTERO_API_BASE, self.user_id)
+    /// Override the base URL (for testing with mock servers).
+    pub fn with_base_url(mut self, base_url: &str) -> Self {
+        self.base_url = base_url.trim_end_matches('/').to_string();
+        self
+    }
+
+    fn items_url(&self) -> String {
+        format!("{}/users/{}/items", self.base_url, self.user_id)
+    }
+
+    fn collections_url(&self) -> String {
+        format!("{}/users/{}/collections", self.base_url, self.user_id)
     }
 
     async fn get_with_retry<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
@@ -78,7 +90,7 @@ impl ZoteroClient {
 
     /// Get the current library version (for incremental sync).
     pub async fn get_library_version(&self) -> Result<Option<u64>> {
-        let url = format!("{}/items?limit=1&format=keys", self.base_url());
+        let url = format!("{}?limit=1&format=keys", self.items_url());
         let resp = self
             .client
             .get(&url)
@@ -105,8 +117,8 @@ impl ZoteroClient {
 
         loop {
             let mut url = format!(
-                "{}/items?limit={}&start={}&format=json",
-                self.base_url(),
+                "{}?limit={}&start={}&format=json",
+                self.items_url(),
                 limit,
                 start
             );
@@ -139,8 +151,8 @@ impl ZoteroClient {
 
         loop {
             let url = format!(
-                "{}/collections?limit={}&start={}&format=json",
-                self.base_url(),
+                "{}?limit={}&start={}&format=json",
+                self.collections_url(),
                 limit,
                 start
             );

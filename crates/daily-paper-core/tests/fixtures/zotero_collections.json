@@ -1,0 +1,16 @@
+[
+  {
+    "data": {
+      "key": "COL1",
+      "name": "ML Papers",
+      "parentCollection": ""
+    }
+  },
+  {
+    "data": {
+      "key": "COL2",
+      "name": "NLP",
+      "parentCollection": "COL1"
+    }
+  }
+]

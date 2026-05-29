@@ -12,6 +12,7 @@ const ARXIV_API_BASE: &str = "http://export.arxiv.org/api/query";
 
 pub struct ArxivClient {
     client: Client,
+    base_url: String,
     categories: Vec<String>,
     include_cross_list: bool,
     _max_results: usize,
@@ -21,10 +22,17 @@ impl ArxivClient {
     pub fn new(categories: Vec<String>, include_cross_list: bool) -> Self {
         Self {
             client: Client::new(),
+            base_url: ARXIV_API_BASE.to_string(),
             categories,
             include_cross_list,
             _max_results: 2000,
         }
+    }
+
+    /// Override the base URL (for testing with mock servers).
+    pub fn with_base_url(mut self, base_url: &str) -> Self {
+        self.base_url = base_url.trim_end_matches('/').to_string();
+        self
     }
 
     /// Fetch papers published in the given date window.
@@ -67,7 +75,7 @@ impl ArxivClient {
 
             let url = format!(
                 "{}?search_query={}&start={}&max_results={}&sortBy=submittedDate&sortOrder=descending",
-                ARXIV_API_BASE,
+                self.base_url,
                 urlencoding::encode(&query),
                 offset,
                 batch_size
