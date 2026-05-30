@@ -14,7 +14,7 @@ impl LocalEmbeddingClient {
     /// Create a new local embedding client.
     ///
     /// Downloads the model on first run (~50MB for bge-small-en-v1.5).
-    /// Models are cached in `cache_dir/models/`.
+    /// `cache_dir` is the parent directory (e.g. `state/cache/`); models are stored in `cache_dir/models/`.
     pub fn new(model_name: &str, batch_size: usize, cache_dir: Option<&Path>) -> Result<Self> {
         info!(model = model_name, "initializing local embedding model");
 

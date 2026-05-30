@@ -20,7 +20,7 @@ pub async fn execute(state_dir: &Path, args: StatusArgs) -> anyhow::Result<()> {
 }
 
 fn show_latest_run(store: &FileStateStore) -> anyhow::Result<()> {
-    let runs_dir = store.root().join("state/runs");
+    let runs_dir = store.root().join("runs");
     if !runs_dir.exists() {
         info!("no runs found");
         return Ok(());
@@ -53,7 +53,7 @@ fn show_latest_run(store: &FileStateStore) -> anyhow::Result<()> {
 }
 
 fn show_run(store: &FileStateStore, run_id: &str) -> anyhow::Result<()> {
-    let manifest_path = format!("state/runs/{}/manifest.json", run_id);
+    let manifest_path = format!("runs/{}/manifest.json", run_id);
     let manifest: RunManifest = store
         .read_json(&daily_paper_core::state::path::StatePath::new(
             &manifest_path,

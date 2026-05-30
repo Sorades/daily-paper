@@ -74,7 +74,7 @@ pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> any
         error: None,
     };
 
-    let manifest_path = StatePath::new(format!("state/runs/{}/manifest.json", run_id))?;
+    let manifest_path = StatePath::new(format!("runs/{}/manifest.json", run_id))?;
     store.write_json(&manifest_path, &manifest)?;
 
     let _lock = store
@@ -228,7 +228,7 @@ async fn stage_zotero_sync(
     };
 
     // Check for cached snapshot
-    let sync_state_path = StatePath::new("state/zotero/sync-state.json")?;
+    let sync_state_path = StatePath::new("cache/zotero/sync-state.json")?;
     let sync_state: Option<daily_paper_core::models::zotero::ZoteroSyncState> =
         store.read_json(&sync_state_path)?;
 
@@ -240,7 +240,7 @@ async fn stage_zotero_sync(
                 let age = Utc::now() - last_success;
                 if age < Duration::hours(config.zotero.max_snapshot_age_hours as i64) {
                     let snap_path = StatePath::new(format!(
-                        "state/zotero/snapshots/{}.json",
+                        "cache/zotero/snapshots/{}.json",
                         snapshot_id
                     ))?;
                     if let Some(snapshot) = store.read_json::<ZoteroSnapshot>(&snap_path)? {
@@ -313,7 +313,7 @@ async fn stage_zotero_sync(
     };
 
     // Save snapshot
-    let snap_path = StatePath::new(format!("state/zotero/snapshots/{}.json", snapshot_id))?;
+    let snap_path = StatePath::new(format!("cache/zotero/snapshots/{}.json", snapshot_id))?;
     store.write_json(&snap_path, &snapshot)?;
 
     // Update sync state
@@ -603,7 +603,7 @@ async fn stage_embedding(
         info!(count = all_texts.len(), "embedding with local model");
         let model_name = config.embedding.model.clone();
         let batch_size = config.embedding.batch_size;
-        let cache_dir = store.root().join("cache/models").to_path_buf();
+        let cache_dir = store.root().join("cache").to_path_buf();
         let texts = all_texts.clone();
         Some(tokio::task::spawn_blocking(move || {
             let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
@@ -702,7 +702,7 @@ async fn stage_embedding(
         let embeddings = if is_local {
             let model_name = config.embedding.model.clone();
             let batch_size = config.embedding.batch_size;
-            let cache_dir = store.root().join("cache/models").to_path_buf();
+            let cache_dir = store.root().join("cache").to_path_buf();
             tokio::task::spawn_blocking(move || {
                 let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
                     &model_name,
