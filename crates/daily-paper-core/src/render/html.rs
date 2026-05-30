@@ -26,9 +26,21 @@ fn format_score(score: f32) -> String {
     format!("{:.0}%", (score * 100.0).round())
 }
 
+/// Map label name to CSS tag class.
+fn label_to_tag_class(label: &str) -> &'static str {
+    match label.to_lowercase().as_str() {
+        "problem" => "tag-problem",
+        "insight" => "tag-insight",
+        "method" => "tag-method",
+        "results" => "tag-results",
+        "limitation" => "tag-limitation",
+        _ => "tag-method",
+    }
+}
+
 /// Format structured summary text into HTML.
 ///
-/// Converts "**Label**: text" blocks into styled divs.
+/// Converts "**Label**: text" blocks into flex rows with fixed-width tags.
 fn format_summary_html(summary: &str) -> String {
     let mut html = String::new();
     for block in summary.split("\n\n") {
@@ -38,13 +50,18 @@ fn format_summary_html(summary: &str) -> String {
             let (label_part, rest) = block.split_at(colon_pos);
             let label = label_part.trim_matches('*').trim();
             let text = &rest[2..]; // skip ": "
+            let tag_class = label_to_tag_class(label);
             html.push_str(&format!(
-                r#"<div class="summary-item"><span class="summary-label">{}</span> {}</div>"#,
-                escape_html(label),
-                escape_html(text)
+                r#"<div class="summary-block"><span class="summary-tag {tag_class}">{label}</span><span class="summary-text">{text}</span></div>"#,
+                tag_class = tag_class,
+                label = escape_html(label),
+                text = escape_html(text),
             ));
         } else {
-            html.push_str(&format!(r#"<div class="summary-item">{}</div>"#, escape_html(block)));
+            html.push_str(&format!(
+                r#"<div class="summary-block"><span class="summary-text">{}</span></div>"#,
+                escape_html(block)
+            ));
         }
     }
     html
@@ -149,11 +166,21 @@ header h1 {{
   font-size: 0.72rem;
   color: var(--text-faint);
 }}
+.meta-bar {{
+  margin-top: 0.5rem;
+  padding: 0.4rem 0;
+}}
+.meta-bar .authors {{
+  margin-top: 0;
+}}
+.meta-bar .affiliations {{
+  margin-top: 0.1rem;
+}}
 .meta-row {{
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-top: 0.6rem;
+  margin-top: 0.4rem;
   flex-wrap: wrap;
 }}
 .chip {{
@@ -193,25 +220,36 @@ header h1 {{
 }}
 .chip-proj:hover {{ background: #e0e7ff; }}
 .summary {{
-  margin-top: 0.9rem;
-  padding: 0.8rem 1rem;
-  background: #f9fafb;
-  border-left: 2px solid var(--accent);
-  border-radius: 0 6px 6px 0;
-  font-size: 0.85rem;
-  color: #374151;
-  line-height: 1.65;
+  margin-top: 0.6rem;
+  border-left: 2px solid #d0d5dd;
+  padding-left: 0.6rem;
+  font-size: 0.82rem;
+  line-height: 1.55;
 }}
-.summary-item {{
-  margin-bottom: 0.5rem;
+.summary-block {{
+  padding: 0.25rem 0;
 }}
-.summary-item:last-child {{
-  margin-bottom: 0;
-}}
-.summary-label {{
+.summary-tag {{
+  display: inline-block;
+  min-width: 5rem;
+  white-space: nowrap;
+  font-size: 0.68rem;
   font-weight: 600;
-  color: var(--text);
-  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  text-align: center;
+  vertical-align: middle;
+  margin-right: 0.4rem;
+}}
+.tag-problem  {{ background: #fef3c7; color: #92400e; }}
+.tag-insight  {{ background: #dbeafe; color: #1e40af; }}
+.tag-method   {{ background: #e0e7ff; color: #3730a3; }}
+.tag-results  {{ background: #d1fae5; color: #065f46; }}
+.tag-limitation {{ background: #fce7d5; color: #9a3412; }}
+.summary-text {{
+  color: #374151;
 }}
 .notable {{
   margin-top: 0.4rem;
@@ -320,12 +358,12 @@ footer {{
             r#"<div class="paper">
   <div class="paper-head">
     <div class="rank">{rank}</div>
-    <div>
-      <div class="title">{title}</div>
-      <div class="authors">{authors}</div>
-      {aff}
-      <div class="meta-row">{chips}</div>
-    </div>
+    <div class="title">{title}</div>
+  </div>
+  <div class="meta-bar">
+    <div class="authors">{authors}</div>
+    {aff}
+    <div class="meta-row">{chips}</div>
   </div>
 "#,
             rank = paper.rank,
