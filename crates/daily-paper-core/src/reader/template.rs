@@ -93,7 +93,6 @@ pub fn build_system_prompt(template_dir: Option<&Path>) -> String {
 pub struct ParsedLlmOutput {
     pub summary: String,
     pub author_affiliations: Vec<AuthorAffiliation>,
-    pub notable_authors: Vec<String>,
     pub project_url: Option<String>,
     pub code_url: Option<String>,
 }
@@ -120,7 +119,29 @@ pub fn parse_llm_output(json_str: &str) -> Option<ParsedLlmOutput> {
 
     let v: serde_json::Value = serde_json::from_str(&json_str).ok()?;
 
-    let summary = v.get("summary")?.as_str()?.to_string();
+    // Parse summary — can be a string (old format) or object (new structured format)
+    let summary = match v.get("summary")? {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(obj) => {
+            // Structured summary: { problem, insight, method, results, limitation }
+            let parts: Vec<String> = [
+                ("Problem", obj.get("problem")),
+                ("Insight", obj.get("insight")),
+                ("Method", obj.get("method")),
+                ("Results", obj.get("results")),
+                ("Limitation", obj.get("limitation")),
+            ]
+            .iter()
+            .filter_map(|(label, val)| {
+                let s = val.and_then(|v| v.as_str())?.trim();
+                if s.is_empty() || s == "null" { None }
+                else { Some(format!("**{}**: {}", label, s)) }
+            })
+            .collect();
+            parts.join("\n\n")
+        }
+        _ => return None,
+    };
 
     let author_affiliations = v
         .get("author_affiliations")
@@ -140,16 +161,6 @@ pub fn parse_llm_output(json_str: &str) -> Option<ParsedLlmOutput> {
         })
         .unwrap_or_default();
 
-    let notable_authors = v
-        .get("notable_authors")
-        .and_then(|a| a.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|a| a.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
     let project_url = v
         .get("project_url")
         .and_then(|u| u.as_str())
@@ -165,7 +176,6 @@ pub fn parse_llm_output(json_str: &str) -> Option<ParsedLlmOutput> {
     Some(ParsedLlmOutput {
         summary,
         author_affiliations,
-        notable_authors,
         project_url,
         code_url,
     })
@@ -257,13 +267,13 @@ mod tests {
 
     #[test]
     fn parse_valid_llm_output() {
+        // Old format (string summary) — backward compatible
         let json = r#"{
             "summary": "This paper proposes a new method.",
             "author_affiliations": [
                 {"name": "Alice Smith", "affiliation": "MIT"},
                 {"name": "Bob Jones", "affiliation": "Stanford"}
             ],
-            "notable_authors": ["Alice Smith"],
             "project_url": "https://example.com",
             "code_url": null
         }"#;
@@ -273,9 +283,30 @@ mod tests {
         assert_eq!(result.author_affiliations.len(), 2);
         assert_eq!(result.author_affiliations[0].name, "Alice Smith");
         assert_eq!(result.author_affiliations[0].affiliation, Some("MIT".into()));
-        assert_eq!(result.notable_authors, vec!["Alice Smith"]);
         assert_eq!(result.project_url, Some("https://example.com".into()));
         assert_eq!(result.code_url, None);
+    }
+
+    #[test]
+    fn parse_structured_summary() {
+        let json = r#"{
+            "summary": {
+                "problem": "Agents fail in noisy environments.",
+                "insight": "Train with noise injection.",
+                "method": "NoiseAgent adds perturbations to training rollouts.",
+                "results": "12% improvement on MMLU.",
+                "limitation": "Only tested on text-based tasks."
+            },
+            "author_affiliations": [],
+            "project_url": null,
+            "code_url": null
+        }"#;
+
+        let result = parse_llm_output(json).unwrap();
+        assert!(result.summary.contains("Problem"));
+        assert!(result.summary.contains("Agents fail"));
+        assert!(result.summary.contains("Results"));
+        assert!(result.summary.contains("12%"));
     }
 
     #[test]
@@ -284,7 +315,6 @@ mod tests {
 {
     "summary": "Test summary",
     "author_affiliations": [],
-    "notable_authors": [],
     "project_url": null,
     "code_url": null
 }

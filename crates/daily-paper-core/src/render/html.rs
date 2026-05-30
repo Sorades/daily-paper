@@ -1,7 +1,7 @@
 use chrono::Utc;
 
 use crate::models::common::Author;
-use crate::models::read::{AuthorAffiliation, ReadResult};
+use crate::models::read::ReadResult;
 
 /// Paper data for report rendering.
 pub struct ReportPaper {
@@ -24,6 +24,30 @@ fn extract_arxiv_id(paper_id: &str) -> Option<&str> {
 /// Format score as percentage string.
 fn format_score(score: f32) -> String {
     format!("{:.0}%", (score * 100.0).round())
+}
+
+/// Format structured summary text into HTML.
+///
+/// Converts "**Label**: text" blocks into styled divs.
+fn format_summary_html(summary: &str) -> String {
+    let mut html = String::new();
+    for block in summary.split("\n\n") {
+        let block = block.trim();
+        if block.is_empty() { continue; }
+        if let Some(colon_pos) = block.find(": ") {
+            let (label_part, rest) = block.split_at(colon_pos);
+            let label = label_part.trim_matches('*').trim();
+            let text = &rest[2..]; // skip ": "
+            html.push_str(&format!(
+                r#"<div class="summary-item"><span class="summary-label">{}</span> {}</div>"#,
+                escape_html(label),
+                escape_html(text)
+            ));
+        } else {
+            html.push_str(&format!(r#"<div class="summary-item">{}</div>"#, escape_html(block)));
+        }
+    }
+    html
 }
 
 /// Render HTML report.
@@ -178,6 +202,17 @@ header h1 {{
   color: #374151;
   line-height: 1.65;
 }}
+.summary-item {{
+  margin-bottom: 0.5rem;
+}}
+.summary-item:last-child {{
+  margin-bottom: 0;
+}}
+.summary-label {{
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.8rem;
+}}
 .notable {{
   margin-top: 0.4rem;
   font-size: 0.75rem;
@@ -304,7 +339,7 @@ footer {{
         if let Some(result) = &paper.read_result {
             html.push_str(&format!(
                 r#"  <div class="summary">{}</div>"#,
-                escape_html(&result.summary)
+                format_summary_html(&result.summary)
             ));
             if !result.metadata.notable_authors.is_empty() {
                 html.push_str(&format!(

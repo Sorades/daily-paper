@@ -189,11 +189,23 @@ async fn run_pipeline(
     .await?;
 
     // Stage 11: Send
-    if args.dry_run || !args.send_email {
+    // Dev (debug): skip email unless --send-email
+    // Release: send email unless --no-email or --dry-run
+    let should_send = if args.dry_run || args.no_email {
+        false
+    } else if args.send_email {
+        true
+    } else if cfg!(debug_assertions) {
+        false // dev default: don't send
+    } else {
+        true // release default: send
+    };
+
+    if !should_send {
         if args.dry_run {
             info!("dry-run: skipping email send");
         } else {
-            info!("email send skipped (use --send-email to deliver)");
+            info!("email skipped (use --send-email to deliver in dev)");
         }
         skip_stage(manifest, StageName::Send);
     } else {
@@ -978,7 +990,7 @@ async fn stage_deep_read(
             }
         };
 
-        // Parse LLM output (JSON with summary and affiliations)
+        // Parse LLM output (JSON with structured summary and affiliations)
         let parsed = daily_paper_core::reader::template::parse_llm_output(&raw_response);
         let summary = parsed.as_ref().map(|p| p.summary.clone()).unwrap_or_else(|| raw_response.clone());
         let author_affiliations = parsed
@@ -993,6 +1005,10 @@ async fn stage_deep_read(
                     .collect()
             })
             .unwrap_or_default();
+
+        // Use LLM-parsed URLs when available (more accurate than source metadata)
+        let llm_project_url = parsed.as_ref().and_then(|p| p.project_url.clone());
+        let llm_code_url = parsed.as_ref().and_then(|p| p.code_url.clone());
 
         let read_cache_key = compute_read_cache_key(
             paper_id,
@@ -1015,8 +1031,8 @@ async fn stage_deep_read(
             metadata: PaperMetadataSummary {
                 institutions: metadata.institutions.clone(),
                 notable_authors: metadata.notable_authors.clone(),
-                project_url: metadata.project_url.clone(),
-                code_url: metadata.code_url.clone(),
+                project_url: llm_project_url.or_else(|| metadata.project_url.clone()),
+                code_url: llm_code_url.or_else(|| metadata.code_url.clone()),
             },
             author_affiliations,
             token_usage,

@@ -33,13 +33,17 @@ pub struct RunArgs {
     #[arg(long)]
     pub date: Option<String>,
 
-    /// Execute pipeline but do not send email (same as default behavior)
+    /// Execute pipeline but do not send email (same as default in dev)
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Actually send the email (off by default)
+    /// Send the email (dev: off by default; release: on by default)
     #[arg(long)]
     pub send_email: bool,
+
+    /// Skip email even in release mode
+    #[arg(long)]
+    pub no_email: bool,
 
     /// Force Zotero sync, ignoring cache
     #[arg(long)]

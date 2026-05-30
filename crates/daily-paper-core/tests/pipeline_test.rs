@@ -145,6 +145,7 @@ fn test_render_produces_html() {
                 token_usage: None,
                 warnings: vec![],
             }),
+            score: 0.85,
         },
     ];
 
@@ -181,6 +182,7 @@ fn test_render_produces_text() {
             landing_url: None,
             pdf_url: None,
             read_result: None,
+            score: 0.5,
         },
     ];
 
