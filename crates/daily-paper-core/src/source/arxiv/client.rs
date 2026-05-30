@@ -175,7 +175,10 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
     let mut in_entry = false;
     let mut authors: Vec<serde_json::Value> = Vec::new();
     let mut in_author = false;
+    let mut in_name = false;
+    let mut in_affiliation = false;
     let mut author_name = String::new();
+    let mut author_affiliation = String::new();
     let mut categories: Vec<String> = Vec::new();
 
     loop {
@@ -192,6 +195,15 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                     "author" if in_entry => {
                         in_author = true;
                         author_name = String::new();
+                        author_affiliation = String::new();
+                    }
+                    "name" if in_author => {
+                        in_name = true;
+                        current_text = String::new();
+                    }
+                    "affiliation" if in_author => {
+                        in_affiliation = true;
+                        current_text = String::new();
                     }
                     _ if in_entry => {
                         _current_tag = tag;
@@ -229,7 +241,21 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                     }
                     "author" if in_entry => {
                         in_author = false;
-                        authors.push(serde_json::json!({"name": author_name}));
+                        in_name = false;
+                        in_affiliation = false;
+                        if !author_name.is_empty() {
+                            let mut author_json = serde_json::json!({"name": author_name});
+                            if !author_affiliation.is_empty() {
+                                author_json["affiliation"] = serde_json::Value::String(author_affiliation.clone());
+                            }
+                            authors.push(author_json);
+                        }
+                    }
+                    "name" if in_author => {
+                        in_name = false;
+                    }
+                    "affiliation" if in_author => {
+                        in_affiliation = false;
                     }
                     "category" if in_entry => {
                         // Extract from attributes
@@ -287,12 +313,15 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
             _ => {}
         }
 
-        // Handle author name accumulation
-        if in_author && !current_text.is_empty() && in_entry {
-            if !author_name.is_empty() {
-                author_name.push(' ');
-            }
+        // Handle text accumulation for name and affiliation
+        if in_name && !current_text.is_empty() && in_entry {
             author_name.push_str(&current_text);
+        }
+        if in_affiliation && !current_text.is_empty() && in_entry {
+            if !author_affiliation.is_empty() {
+                author_affiliation.push(' ');
+            }
+            author_affiliation.push_str(&current_text);
         }
     }
 
@@ -327,5 +356,28 @@ mod tests {
         let entry = &entries[0];
         assert_eq!(entry["title"], "Test Paper Title");
         assert_eq!(entry["summary"], "A test abstract about machine learning.");
+    }
+
+    #[test]
+    fn parse_authors_correctly() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2301.12345v1</id>
+    <title>Test</title>
+    <summary>Abstract</summary>
+    <author><name>Alice Smith</name><arxiv:affiliation>MIT</arxiv:affiliation></author>
+    <author><name>Bob Jones</name></author>
+  </entry>
+</feed>"#;
+
+        let entries = parse_arxiv_feed(xml).unwrap();
+        let entry = &entries[0];
+        let authors = entry["authors"].as_array().unwrap();
+        assert_eq!(authors.len(), 2);
+        assert_eq!(authors[0]["name"], "Alice Smith");
+        assert_eq!(authors[1]["name"], "Bob Jones");
+        // Affiliation should NOT be included in the name
+        assert!(!authors[0]["name"].as_str().unwrap().contains("MIT"));
     }
 }

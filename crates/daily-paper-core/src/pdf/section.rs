@@ -76,6 +76,7 @@ pub fn parse_sections(text: &str) -> Vec<PaperSection> {
 /// Select text sections for LLM input, prioritizing key sections.
 ///
 /// Returns the selected text within the configured token/char budget.
+/// Always includes the beginning of the paper (where authors/affiliations typically are).
 pub fn select_sections_for_reading(
     text: &str,
     sections: &[PaperSection],
@@ -99,13 +100,18 @@ pub fn select_sections_for_reading(
         "discussion",
     ];
 
-    let mut selected_sections: Vec<&PaperSection> = Vec::new();
-    let mut total_chars = 0;
+    // Always include the beginning of the paper (first ~2000 chars)
+    // This typically contains title, authors, affiliations, and abstract
+    let header_chars = 2000usize.min(text.len()).min(max_chars / 3);
+    let header_text = &text[..header_chars];
 
-    // First pass: add priority sections
+    let mut selected_sections: Vec<&PaperSection> = Vec::new();
+    let mut total_chars = header_chars;
+
+    // First pass: add priority sections (skip if they overlap with header)
     for p in &priority {
         for section in sections {
-            if section.normalized_title.contains(p) {
+            if section.normalized_title.contains(p) && section.start_byte >= header_chars {
                 let section_text = &text[section.start_byte..section.end_byte];
                 if total_chars + section_text.len() <= max_chars {
                     selected_sections.push(section);
@@ -115,10 +121,10 @@ pub fn select_sections_for_reading(
         }
     }
 
-    // If we have room, add remaining sections
+    // If we have room, add remaining sections (skip header area and references)
     if total_chars < max_chars {
         for section in sections {
-            if !selected_sections.contains(&section) {
+            if !selected_sections.contains(&section) && section.start_byte >= header_chars {
                 let section_text = &text[section.start_byte..section.end_byte];
                 if total_chars + section_text.len() <= max_chars {
                     selected_sections.push(section);
@@ -131,17 +137,19 @@ pub fn select_sections_for_reading(
     // Sort by original position
     selected_sections.sort_by_key(|s| s.start_byte);
 
-    // Concatenate
+    // Concatenate: header first, then sections
     let mut result = String::new();
+    result.push_str(header_text);
+
     for section in selected_sections {
         let section_text = &text[section.start_byte..section.end_byte];
-        result.push_str(section_text);
         if !result.ends_with('\n') {
             result.push('\n');
         }
+        result.push_str(section_text);
     }
 
-    // If no sections found, take the first max_chars of text
+    // If no sections found and no header, take the first max_chars of text
     if result.is_empty() {
         let end = text.len().min(max_chars);
         result = text[..end].to_string();

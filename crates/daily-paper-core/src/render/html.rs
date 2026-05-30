@@ -1,17 +1,68 @@
 use chrono::Utc;
 
-use crate::models::read::ReadResult;
+use crate::models::common::Author;
+use crate::models::read::{AuthorAffiliation, ReadResult};
 
 /// Paper data for report rendering.
 pub struct ReportPaper {
     pub paper_id: String,
     pub rank: usize,
     pub title: String,
-    pub authors: String,
+    pub authors: Vec<Author>,
     pub abstract_text: String,
     pub landing_url: Option<String>,
     pub pdf_url: Option<String>,
     pub read_result: Option<ReadResult>,
+}
+
+/// Format authors and affiliations for display.
+///
+/// Shows authors as a comma-separated list, then affiliations below.
+fn format_authors_with_affiliations(
+    authors: &[Author],
+    llm_affiliations: Option<&[AuthorAffiliation]>,
+) -> String {
+    if authors.is_empty() {
+        return String::new();
+    }
+
+    // Collect unique affiliations in order
+    let mut affiliations: Vec<String> = Vec::new();
+
+    // Get affiliations from LLM extraction
+    if let Some(llm_affs) = llm_affiliations {
+        for aff in llm_affs {
+            if let Some(ref aff_str) = aff.affiliation {
+                if !aff_str.is_empty() && !affiliations.contains(aff_str) {
+                    affiliations.push(aff_str.clone());
+                }
+            }
+        }
+    }
+
+    // Fall back to source metadata if no LLM affiliations
+    if affiliations.is_empty() {
+        for author in authors {
+            if let Some(ref aff) = author.affiliation {
+                if !aff.is_empty() && !affiliations.contains(aff) {
+                    affiliations.push(aff.clone());
+                }
+            }
+        }
+    }
+
+    // Format authors
+    let authors_str: Vec<String> = authors.iter().map(|a| escape_html(&a.name)).collect();
+    let mut result = authors_str.join(", ");
+
+    // Add affiliations if any
+    if !affiliations.is_empty() {
+        result.push_str("<br><small>");
+        result.push_str(&affiliations.iter().map(|a| escape_html(a)).collect::<Vec<_>>().join(", "));
+        result.push_str("</small>");
+    }
+
+    result
 }
 
 /// Render HTML report.
@@ -28,6 +79,7 @@ h1 {{ color: #1a1a1a; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }}
 .paper {{ margin: 20px 0; padding: 15px; border: 1px solid #e0e0e0; border-radius: 8px; }}
 .paper h2 {{ margin-top: 0; color: #2c3e50; }}
 .authors {{ color: #666; font-style: italic; }}
+.authors sup {{ font-style: normal; color: #e74c3c; }}
 .abstract {{ color: #555; font-size: 0.95em; }}
 .summary {{ background: #f8f9fa; padding: 12px; border-radius: 4px; margin-top: 10px; }}
 .links a {{ margin-right: 15px; color: #3498db; text-decoration: none; }}
@@ -41,6 +93,11 @@ h1 {{ color: #1a1a1a; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }}
     );
 
     for paper in papers {
+        let llm_affiliations = paper
+            .read_result
+            .as_ref()
+            .map(|r| r.author_affiliations.as_slice());
+        let authors_html = format_authors_with_affiliations(&paper.authors, llm_affiliations);
         html.push_str(&format!(
             r#"<div class="paper">
 <h2>#{rank}. {title}</h2>
@@ -48,7 +105,7 @@ h1 {{ color: #1a1a1a; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }}
 "#,
             rank = paper.rank,
             title = escape_html(&paper.title),
-            authors = escape_html(&paper.authors),
+            authors = authors_html,
         ));
 
         if let Some(url) = &paper.landing_url {
@@ -95,6 +152,7 @@ fn escape_html(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::common::Author;
 
     #[test]
     fn render_basic_report() {
@@ -103,7 +161,20 @@ mod tests {
                 paper_id: "p1".into(),
                 rank: 1,
                 title: "Test Paper".into(),
-                authors: "Alice Smith".into(),
+                authors: vec![
+                    Author {
+                        name: "Alice Smith".into(),
+                        normalized_name: None,
+                        affiliation: Some("MIT".into()),
+                        url: None,
+                    },
+                    Author {
+                        name: "Bob Jones".into(),
+                        normalized_name: None,
+                        affiliation: Some("Stanford".into()),
+                        url: None,
+                    },
+                ],
                 abstract_text: "An abstract.".into(),
                 landing_url: Some("https://arxiv.org/abs/2301.12345".into()),
                 pdf_url: None,
@@ -114,6 +185,9 @@ mod tests {
         let html = render_html("Daily Papers", &papers, "test-run-1");
         assert!(html.contains("Test Paper"));
         assert!(html.contains("Alice Smith"));
+        assert!(html.contains("Bob Jones"));
+        assert!(html.contains("MIT"));
+        assert!(html.contains("Stanford"));
         assert!(html.contains("#1"));
         assert!(html.contains("test-run-1"));
     }

@@ -77,10 +77,11 @@ fn extract_authors(entry: &serde_json::Value) -> Vec<Author> {
             arr.iter()
                 .filter_map(|a| {
                     let name = a.get("name")?.as_str()?;
+                    let affiliation = a.get("affiliation").and_then(|v| v.as_str()).map(String::from);
                     Some(Author {
                         name: name.to_string(),
                         normalized_name: None,
-                        affiliation: None,
+                        affiliation,
                         url: None,
                     })
                 })

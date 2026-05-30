@@ -1,16 +1,36 @@
 use sha2::Digest;
 
 /// Default system prompt for deep reading.
-const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a research paper analyst. Given a paper's title, abstract, and selected text sections, produce a concise summary in the specified language.
+const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a research paper analyst. Given a paper's title, abstract, and selected text sections, produce:
 
-The summary should:
-1. Explain what the paper does
-2. Describe the method or technical approach
-3. State the key results or contributions
-4. Explain why it might be relevant to the reader's interests
-5. Mention notable institutions, authors, project URLs, or code links if available
+1. A concise summary in the specified language
+2. List of institutions/affiliations mentioned in the paper
 
-Output a single cohesive paragraph. Do not produce bullet-point reading notes."#;
+Output valid JSON in this exact format:
+{
+  "summary": "Your concise summary paragraph here...",
+  "author_affiliations": [
+    {"name": "Author Name", "affiliation": "University or Company"}
+  ],
+  "notable_authors": ["Famous Author 1", "Famous Author 2"],
+  "project_url": "https://project-page.example.com or null",
+  "code_url": "https://github.com/example/repo or null"
+}
+
+Guidelines for summary:
+- Explain what the paper does
+- Describe the method or technical approach
+- State the key results or contributions
+- Explain relevance to reader's interests
+
+Guidelines for affiliations:
+- Extract ALL institutions mentioned in the paper
+- Look for affiliations in footnotes, author blocks, or first page
+- Use the most specific institution name (e.g., "MIT CSAIL" not just "MIT")
+- Include each unique institution only once
+- For each author, try to find their affiliation
+
+Output ONLY the JSON, no other text."#;
 
 /// Build the user prompt from paper info and selected text.
 pub fn build_user_prompt(
@@ -32,7 +52,7 @@ Selected text from the paper:
 {selected_text}
 ---
 
-Please summarize this paper in {language}."#
+Summarize this paper in {language}. Extract author affiliations from the text."#
     )
 }
 
@@ -41,6 +61,89 @@ pub fn build_system_prompt(custom_template: Option<&str>) -> String {
     custom_template
         .map(|s| s.to_string())
         .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string())
+}
+
+/// Parsed LLM output containing summary and metadata.
+#[derive(Debug, Clone)]
+pub struct ParsedLlmOutput {
+    pub summary: String,
+    pub author_affiliations: Vec<AuthorAffiliation>,
+    pub notable_authors: Vec<String>,
+    pub project_url: Option<String>,
+    pub code_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthorAffiliation {
+    pub name: String,
+    pub affiliation: Option<String>,
+}
+
+/// Parse LLM JSON output.
+pub fn parse_llm_output(json_str: &str) -> Option<ParsedLlmOutput> {
+    // Try to extract JSON from the response (handle markdown code blocks)
+    let json_str = json_str.trim();
+    let json_str = if json_str.starts_with("```") {
+        // Remove markdown code block markers
+        let lines: Vec<&str> = json_str.lines().collect();
+        let start = lines.iter().position(|l| l.contains('{'))?;
+        let end = lines.iter().rposition(|l| l.contains('}'))?;
+        lines[start..=end].join("\n")
+    } else {
+        json_str.to_string()
+    };
+
+    let v: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+
+    let summary = v.get("summary")?.as_str()?.to_string();
+
+    let author_affiliations = v
+        .get("author_affiliations")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let affiliation = item
+                        .get("affiliation")
+                        .and_then(|a| a.as_str())
+                        .filter(|s| !s.is_empty() && *s != "null")
+                        .map(|s| s.to_string());
+                    Some(AuthorAffiliation { name, affiliation })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let notable_authors = v
+        .get("notable_authors")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let project_url = v
+        .get("project_url")
+        .and_then(|u| u.as_str())
+        .filter(|s| !s.is_empty() && *s != "null")
+        .map(|s| s.to_string());
+
+    let code_url = v
+        .get("code_url")
+        .and_then(|u| u.as_str())
+        .filter(|s| !s.is_empty() && *s != "null")
+        .map(|s| s.to_string());
+
+    Some(ParsedLlmOutput {
+        summary,
+        author_affiliations,
+        notable_authors,
+        project_url,
+        code_url,
+    })
 }
 
 /// Compute the template hash for cache invalidation.
@@ -123,5 +226,44 @@ mod tests {
     fn custom_template_overrides() {
         let prompt = build_system_prompt(Some("custom prompt"));
         assert_eq!(prompt, "custom prompt");
+    }
+
+    #[test]
+    fn parse_valid_llm_output() {
+        let json = r#"{
+            "summary": "This paper proposes a new method.",
+            "author_affiliations": [
+                {"name": "Alice Smith", "affiliation": "MIT"},
+                {"name": "Bob Jones", "affiliation": "Stanford"}
+            ],
+            "notable_authors": ["Alice Smith"],
+            "project_url": "https://example.com",
+            "code_url": null
+        }"#;
+
+        let result = parse_llm_output(json).unwrap();
+        assert_eq!(result.summary, "This paper proposes a new method.");
+        assert_eq!(result.author_affiliations.len(), 2);
+        assert_eq!(result.author_affiliations[0].name, "Alice Smith");
+        assert_eq!(result.author_affiliations[0].affiliation, Some("MIT".into()));
+        assert_eq!(result.notable_authors, vec!["Alice Smith"]);
+        assert_eq!(result.project_url, Some("https://example.com".into()));
+        assert_eq!(result.code_url, None);
+    }
+
+    #[test]
+    fn parse_llm_output_with_markdown() {
+        let json = r#"```json
+{
+    "summary": "Test summary",
+    "author_affiliations": [],
+    "notable_authors": [],
+    "project_url": null,
+    "code_url": null
+}
+```"#;
+
+        let result = parse_llm_output(json).unwrap();
+        assert_eq!(result.summary, "Test summary");
     }
 }

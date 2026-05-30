@@ -35,8 +35,15 @@ pub struct ReadResult {
     pub language: String,
     pub summary: String,
     pub metadata: PaperMetadataSummary,
+    pub author_affiliations: Vec<AuthorAffiliation>,
     pub token_usage: Option<TokenUsage>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorAffiliation {
+    pub name: String,
+    pub affiliation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

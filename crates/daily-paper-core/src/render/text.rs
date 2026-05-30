@@ -1,12 +1,51 @@
 use super::html::ReportPaper;
 
+/// Format authors and affiliations as plain text.
+fn format_authors_text(paper: &ReportPaper) -> String {
+    // Get affiliations from LLM extraction
+    let mut affiliations: Vec<String> = Vec::new();
+
+    if let Some(ref read_result) = paper.read_result {
+        for aff in &read_result.author_affiliations {
+            if let Some(ref aff_str) = aff.affiliation {
+                if !aff_str.is_empty() && !affiliations.contains(aff_str) {
+                    affiliations.push(aff_str.clone());
+                }
+            }
+        }
+    }
+
+    // Fall back to source metadata if no LLM affiliations
+    if affiliations.is_empty() {
+        for author in &paper.authors {
+            if let Some(ref aff) = author.affiliation {
+                if !aff.is_empty() && !affiliations.contains(aff) {
+                    affiliations.push(aff.clone());
+                }
+            }
+        }
+    }
+
+    // Format authors
+    let authors_str: Vec<String> = paper.authors.iter().map(|a| a.name.clone()).collect();
+    let mut result = authors_str.join(", ");
+
+    // Add affiliations if any
+    if !affiliations.is_empty() {
+        result.push_str("\n   ");
+        result.push_str(&affiliations.join(", "));
+    }
+
+    result
+}
+
 /// Render plain text report (fallback for non-HTML sinks).
 pub fn render_text(title: &str, papers: &[ReportPaper], run_id: &str) -> String {
     let mut text = format!("{}\n{}\n\n", title, "=".repeat(title.len()));
 
     for paper in papers {
         text.push_str(&format!("#{}. {}\n", paper.rank, paper.title));
-        text.push_str(&format!("   Authors: {}\n", paper.authors));
+        text.push_str(&format!("   Authors: {}\n", format_authors_text(paper)));
 
         if let Some(url) = &paper.landing_url {
             text.push_str(&format!("   URL: {}\n", url));

@@ -949,7 +949,7 @@ async fn stage_deep_read(
         let trimmed_prompt = trim_to_token_budget(&user_prompt, config.reader.max_input_tokens * 4);
 
         // Call LLM
-        let (summary, token_usage) = match reader.complete(&system_prompt, &trimmed_prompt).await {
+        let (raw_response, token_usage) = match reader.complete(&system_prompt, &trimmed_prompt).await {
             Ok(r) => r,
             Err(e) => {
                 warn!(paper_id = %paper_id, error = %e, "LLM read failed");
@@ -958,6 +958,22 @@ async fn stage_deep_read(
                 continue;
             }
         };
+
+        // Parse LLM output (JSON with summary and affiliations)
+        let parsed = daily_paper_core::reader::template::parse_llm_output(&raw_response);
+        let summary = parsed.as_ref().map(|p| p.summary.clone()).unwrap_or_else(|| raw_response.clone());
+        let author_affiliations = parsed
+            .as_ref()
+            .map(|p| {
+                p.author_affiliations
+                    .iter()
+                    .map(|aa| daily_paper_core::models::read::AuthorAffiliation {
+                        name: aa.name.clone(),
+                        affiliation: aa.affiliation.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let read_cache_key = compute_read_cache_key(
             paper_id,
@@ -983,6 +999,7 @@ async fn stage_deep_read(
                 project_url: metadata.project_url.clone(),
                 code_url: metadata.code_url.clone(),
             },
+            author_affiliations,
             token_usage,
             warnings: Vec::new(),
         };
@@ -1050,12 +1067,7 @@ async fn stage_render(
                 paper_id: paper_id.clone(),
                 rank: i + 1,
                 title: candidate.title.clone(),
-                authors: candidate
-                    .authors
-                    .iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                authors: candidate.authors.clone(),
                 abstract_text: candidate.abstract_text.clone(),
                 landing_url: candidate.landing_url.clone(),
                 pdf_url: candidate.pdf_url.clone(),

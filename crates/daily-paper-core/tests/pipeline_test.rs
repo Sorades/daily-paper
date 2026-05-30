@@ -108,6 +108,7 @@ fn test_selection_takes_top_n() {
 #[test]
 fn test_render_produces_html() {
     use daily_paper_core::render::html::{render_html, ReportPaper};
+    use daily_paper_core::models::common::Author;
     use daily_paper_core::models::read::ReadResult;
 
     let papers = vec![
@@ -115,7 +116,14 @@ fn test_render_produces_html() {
             paper_id: "paper_a".to_string(),
             rank: 1,
             title: "Test Paper".to_string(),
-            authors: "Alice Smith".to_string(),
+            authors: vec![
+                Author {
+                    name: "Alice Smith".into(),
+                    normalized_name: None,
+                    affiliation: Some("MIT".into()),
+                    url: None,
+                },
+            ],
             abstract_text: "A test abstract.".to_string(),
             landing_url: Some("https://arxiv.org/abs/2301.12345".to_string()),
             pdf_url: None,
@@ -133,6 +141,7 @@ fn test_render_produces_html() {
                     project_url: None,
                     code_url: None,
                 },
+                author_affiliations: vec![],
                 token_usage: None,
                 warnings: vec![],
             }),
@@ -143,6 +152,7 @@ fn test_render_produces_html() {
 
     assert!(html.contains("Test Paper"));
     assert!(html.contains("Alice Smith"));
+    assert!(html.contains("MIT"));
     assert!(html.contains("这是一篇测试论文的摘要"));
     assert!(html.contains("test-run-001"));
 }
@@ -152,13 +162,21 @@ fn test_render_produces_html() {
 fn test_render_produces_text() {
     use daily_paper_core::render::text::render_text;
     use daily_paper_core::render::html::ReportPaper;
+    use daily_paper_core::models::common::Author;
 
     let papers = vec![
         ReportPaper {
             paper_id: "paper_a".to_string(),
             rank: 1,
             title: "Test Paper".to_string(),
-            authors: "Alice Smith".to_string(),
+            authors: vec![
+                Author {
+                    name: "Alice Smith".into(),
+                    normalized_name: None,
+                    affiliation: Some("MIT".into()),
+                    url: None,
+                },
+            ],
             abstract_text: "A test abstract.".to_string(),
             landing_url: None,
             pdf_url: None,
@@ -170,6 +188,7 @@ fn test_render_produces_text() {
 
     assert!(text.contains("Test Paper"));
     assert!(text.contains("Alice Smith"));
+    assert!(text.contains("MIT"));
     assert!(text.contains("test-run-001"));
 }
 
