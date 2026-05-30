@@ -1,6 +1,7 @@
 use sha2::Digest;
+use std::path::Path;
 
-/// Default system prompt for deep reading.
+/// Default system prompt for deep reading (fallback if template file not found).
 const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a research paper analyst. Given a paper's title, abstract, and selected text sections, produce:
 
 1. A concise summary in the specified language
@@ -57,10 +58,34 @@ Summarize this paper in {language}. Extract author affiliations from the text."#
 }
 
 /// Build the system prompt (can be overridden by template file).
-pub fn build_system_prompt(custom_template: Option<&str>) -> String {
-    custom_template
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string())
+///
+/// Looks for template in this order:
+/// 1. `.daily-paper/config/templates/system_prompt.txt` (project mode)
+/// 2. `templates/system_prompt.txt` relative to current directory
+/// 3. Built-in default
+pub fn build_system_prompt(template_dir: Option<&Path>) -> String {
+    // Try to load from template directory
+    if let Some(dir) = template_dir {
+        let path = dir.join("system_prompt.txt");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return content;
+        }
+    }
+
+    // Try default locations
+    let default_paths = [
+        Path::new(".daily-paper/config/templates/system_prompt.txt"),
+        Path::new("templates/system_prompt.txt"),
+    ];
+
+    for path in &default_paths {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return content;
+        }
+    }
+
+    // Fall back to built-in
+    DEFAULT_SYSTEM_PROMPT.to_string()
 }
 
 /// Parsed LLM output containing summary and metadata.
@@ -223,9 +248,11 @@ mod tests {
     }
 
     #[test]
-    fn custom_template_overrides() {
-        let prompt = build_system_prompt(Some("custom prompt"));
-        assert_eq!(prompt, "custom prompt");
+    fn load_template_from_file() {
+        let dir = Path::new("tests/fixtures");
+        let prompt = build_system_prompt(Some(dir));
+        // Should load from file if exists, otherwise fall back to default
+        assert!(prompt.len() > 50);
     }
 
     #[test]

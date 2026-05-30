@@ -603,11 +603,13 @@ async fn stage_embedding(
         info!(count = all_texts.len(), "embedding with local model");
         let model_name = config.embedding.model.clone();
         let batch_size = config.embedding.batch_size;
+        let cache_dir = store.root().join("cache/models").to_path_buf();
         let texts = all_texts.clone();
         Some(tokio::task::spawn_blocking(move || {
             let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
                 &model_name,
                 batch_size,
+                Some(&cache_dir),
             )?;
             client.embed_batch(&texts)
         })
@@ -700,10 +702,12 @@ async fn stage_embedding(
         let embeddings = if is_local {
             let model_name = config.embedding.model.clone();
             let batch_size = config.embedding.batch_size;
+            let cache_dir = store.root().join("cache/models").to_path_buf();
             tokio::task::spawn_blocking(move || {
                 let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
                     &model_name,
                     batch_size,
+                    Some(&cache_dir),
                 )?;
                 client.embed_batch(&texts)
             })

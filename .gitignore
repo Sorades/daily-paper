@@ -2,3 +2,5 @@
 /.git-store/
 /.daily-paper/
 /.claude/
+/dev/state/
+.envrc

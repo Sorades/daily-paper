@@ -24,7 +24,7 @@ impl FileStateStore {
 
     /// Ensure the root and standard subdirectories exist.
     pub fn ensure_dirs(&self) -> Result<()> {
-        for subdir in &["state/runs", "state/zotero/snapshots", "cache/arxiv", "cache/embeddings", "cache/rerank", "cache/papers", "reports", "deliveries/history"] {
+        for subdir in &["state/runs", "state/zotero/snapshots", "cache/arxiv", "cache/embeddings", "cache/models", "cache/rerank", "cache/papers", "reports", "deliveries/history"] {
             let dir = self.root.join(subdir);
             std::fs::create_dir_all(&dir)?;
         }
