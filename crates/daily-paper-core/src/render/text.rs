@@ -44,10 +44,14 @@ pub fn render_text(title: &str, papers: &[ReportPaper], run_id: &str) -> String 
     let mut text = format!("{}\n{}\n\n", title, "=".repeat(title.len()));
 
     for paper in papers {
-        text.push_str(&format!("#{}. {}\n", paper.rank, paper.title));
+        let score_pct = format!("{:.0}%", (paper.score * 100.0).round());
+        text.push_str(&format!("#{}. {} [{}]\n", paper.rank, paper.title, score_pct));
         text.push_str(&format!("   Authors: {}\n", format_authors_text(paper)));
 
-        if let Some(url) = &paper.landing_url {
+        // arXiv link
+        if let Some(arxiv_id) = paper.paper_id.strip_prefix("arxiv:") {
+            text.push_str(&format!("   arXiv: https://arxiv.org/abs/{}\n", arxiv_id));
+        } else if let Some(url) = &paper.landing_url {
             text.push_str(&format!("   URL: {}\n", url));
         }
 

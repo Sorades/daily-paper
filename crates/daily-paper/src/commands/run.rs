@@ -148,7 +148,7 @@ async fn run_pipeline(
         stage_embedding(store, config, manifest, &dedup.candidates, &snapshot).await?;
 
     // Stage 5: Rerank + selection
-    let selection = stage_rerank(
+    let (selection, rerank_scores) = stage_rerank(
         store,
         config,
         manifest,
@@ -184,12 +184,17 @@ async fn run_pipeline(
         &selection.selected_paper_ids,
         &dedup.candidates,
         &read_results,
+        &rerank_scores,
     )
     .await?;
 
     // Stage 11: Send
-    if args.dry_run {
-        info!("dry-run: skipping email send");
+    if args.dry_run || !args.send_email {
+        if args.dry_run {
+            info!("dry-run: skipping email send");
+        } else {
+            info!("email send skipped (use --send-email to deliver)");
+        }
         skip_stage(manifest, StageName::Send);
     } else {
         stage_send(
@@ -753,7 +758,7 @@ async fn stage_rerank(
     candidate_embs: &[(String, Vec<f32>)],
     library_embs: &[(String, Vec<f32>, f32)],
     snapshot: &ZoteroSnapshot,
-) -> anyhow::Result<daily_paper_core::rerank::selection::ReadSelection> {
+) -> anyhow::Result<(daily_paper_core::rerank::selection::ReadSelection, Vec<(String, f32)>)> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
         stage: StageName::Rerank,
@@ -786,6 +791,16 @@ async fn stage_rerank(
 
     let selection = select_top_n(&rerank_cache_key, &ranked_ids, config.reader.top_n);
 
+    // Collect scores for selected papers
+    let scores: Vec<(String, f32)> = selection
+        .selected_paper_ids
+        .iter()
+        .filter_map(|pid| {
+            let r = ranked.iter().find(|r| &r.paper_id == pid)?;
+            Some((pid.clone(), r.score))
+        })
+        .collect();
+
     info!(
         ranked = ranked.len(),
         selected = selection.selected_paper_ids.len(),
@@ -807,7 +822,7 @@ async fn stage_rerank(
     record.output_ref = Some(selection.selection_id.clone());
     manifest.stages.push(record);
 
-    Ok(selection)
+    Ok((selection, scores))
 }
 
 async fn stage_deep_read(
@@ -1047,6 +1062,7 @@ async fn stage_render(
     selected_ids: &[String],
     candidates: &[CandidatePaper],
     read_results: &[ReadResult],
+    scores: &[(String, f32)],
 ) -> anyhow::Result<(String, Option<String>)> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -1076,6 +1092,7 @@ async fn stage_render(
                 landing_url: candidate.landing_url.clone(),
                 pdf_url: candidate.pdf_url.clone(),
                 read_result,
+                score: scores.iter().find(|(id, _)| id == paper_id).map(|(_, s)| *s).unwrap_or(0.0),
             })
         })
         .collect();
