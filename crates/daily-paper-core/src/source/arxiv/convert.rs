@@ -31,8 +31,8 @@ pub fn arxmliv_entry_to_candidate(entry: &serde_json::Value) -> Option<Candidate
     let published_at = parse_datetime(entry, "published");
     let updated_at = parse_datetime(entry, "updated");
 
-    let landing_url = extract_link(entry, "alternate");
-    let pdf_url = extract_link(entry, "related").filter(|u| u.contains("/pdf/"));
+    let landing_url = entry.get("link_alternate").and_then(|v| v.as_str()).map(String::from);
+    let pdf_url = entry.get("link_related").and_then(|v| v.as_str()).map(String::from);
 
     // Extract DOI if present
     let doi = entry
@@ -101,21 +101,6 @@ fn extract_categories(entry: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn extract_link(entry: &serde_json::Value, rel: &str) -> Option<String> {
-    entry
-        .get("link")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| {
-            // If link is stored as a single string, use it for alternate
-            if rel == "alternate" {
-                entry.get("link").and_then(|v| v.as_str()).map(String::from)
-            } else {
-                None
-            }
-        })
-}
-
 fn parse_datetime(entry: &serde_json::Value, field: &str) -> Option<DateTime<Utc>> {
     entry
         .get(field)
@@ -164,5 +149,38 @@ mod tests {
         assert_eq!(paper.arxiv_id, Some("2301.12345".into()));
         // source_id keeps the original
         assert_eq!(paper.source_id, "2301.12345v3");
+    }
+
+    #[test]
+    fn extract_pdf_url_from_link_related() {
+        let entry = json!({
+            "id": "http://arxiv.org/abs/2301.12345v1",
+            "title": "Paper with PDF",
+            "summary": "Abstract.",
+            "authors": [],
+            "categories": [],
+            "link_alternate": "http://arxiv.org/abs/2301.12345v1",
+            "link_related": "http://arxiv.org/pdf/2301.12345v1"
+        });
+
+        let paper = arxmliv_entry_to_candidate(&entry).unwrap();
+        assert_eq!(paper.landing_url, Some("http://arxiv.org/abs/2301.12345v1".into()));
+        assert_eq!(paper.pdf_url, Some("http://arxiv.org/pdf/2301.12345v1".into()));
+    }
+
+    #[test]
+    fn no_pdf_url_when_missing() {
+        let entry = json!({
+            "id": "http://arxiv.org/abs/2301.12345v1",
+            "title": "Paper without PDF",
+            "summary": "Abstract.",
+            "authors": [],
+            "categories": [],
+            "link_alternate": "http://arxiv.org/abs/2301.12345v1"
+        });
+
+        let paper = arxmliv_entry_to_candidate(&entry).unwrap();
+        assert_eq!(paper.landing_url, Some("http://arxiv.org/abs/2301.12345v1".into()));
+        assert_eq!(paper.pdf_url, None);
     }
 }

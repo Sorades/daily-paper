@@ -247,13 +247,38 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
             }
             Ok(Event::Empty(ref e)) => {
                 let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "category" && in_entry {
-                    for attr in e.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                        let val = String::from_utf8_lossy(&attr.value).to_string();
-                        if key == "term" {
-                            categories.push(val);
+                if in_entry {
+                    match tag.as_str() {
+                        "category" => {
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if key == "term" {
+                                    categories.push(val);
+                                }
+                            }
                         }
+                        "link" => {
+                            let mut href = String::new();
+                            let mut rel = String::new();
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                match key.as_str() {
+                                    "href" => href = val,
+                                    "rel" => rel = val,
+                                    _ => {}
+                                }
+                            }
+                            if !href.is_empty() {
+                                if let Some(ref mut entry) = current_entry {
+                                    // Store as "link_alternate" or "link_related"
+                                    let field = format!("link_{}", rel);
+                                    entry.insert(field, serde_json::Value::String(href));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
