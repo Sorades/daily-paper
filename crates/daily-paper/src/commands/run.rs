@@ -341,7 +341,7 @@ async fn stage_zotero_sync(
 }
 
 async fn stage_source_fetch(
-    _store: &FileStateStore,
+    store: &FileStateStore,
     config: &ResolvedConfig,
     manifest: &mut RunManifest,
     date_window: &DateWindow,
@@ -357,6 +357,32 @@ async fn stage_source_fetch(
         output_ref: None,
         error: None,
     };
+
+    // Compute cache key from date window + source config
+    let cache_key = {
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(date_window.label.as_bytes());
+        for source in &config.sources {
+            hasher.update(source.kind.as_bytes());
+            for cat in &source.categories {
+                hasher.update(cat.as_bytes());
+            }
+            hasher.update([source.include_cross_list as u8]);
+        }
+        hex::encode(hasher.finalize())
+    };
+    let cache_path = StatePath::new(format!("cache/arxiv/{}.json", cache_key))?;
+
+    // Check cache
+    if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&cache_path)? {
+        info!(count = candidates.len(), "using cached arXiv results");
+        record.status = StageStatus::Succeeded;
+        record.cache_hit = true;
+        record.finished_at = Some(Utc::now());
+        manifest.stages.push(record);
+        return Ok(candidates);
+    }
 
     let mut all_candidates = Vec::new();
 
@@ -383,6 +409,9 @@ async fn stage_source_fetch(
     all_candidates.dedup_by(|a, b| a.paper_id == b.paper_id);
 
     info!(count = all_candidates.len(), "fetched candidate papers");
+
+    // Cache results
+    store.write_json(&cache_path, &all_candidates)?;
 
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());

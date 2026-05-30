@@ -21,6 +21,8 @@ pub enum Commands {
     Run(RunArgs),
     /// Show status of recent runs
     Status(StatusArgs),
+    /// Serve reports as a web page
+    Serve(ServeArgs),
 }
 
 #[derive(Parser)]
@@ -59,4 +61,11 @@ pub struct StatusArgs {
     /// Show status for a specific run
     #[arg(long)]
     pub run_id: Option<String>,
+}
+
+#[derive(Parser, Clone)]
+pub struct ServeArgs {
+    /// Port to listen on
+    #[arg(long, default_value = "3000")]
+    pub port: u16,
 }

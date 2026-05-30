@@ -19,3 +19,4 @@ serde_json = { workspace = true }
 fastrand = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+axum = { workspace = true }
