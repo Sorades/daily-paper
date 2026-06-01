@@ -5,7 +5,9 @@ mod status;
 use std::path::{Path, PathBuf};
 
 use crate::cli::{Cli, Commands};
-use daily_paper_core::config::{default_config_path, default_state_dir, init_project_dir, is_project_mode, load_config};
+use daily_paper_core::config::{
+    default_config_path, default_state_dir, init_project_dir, is_project_mode, load_config,
+};
 
 pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     // Handle init command first (doesn't need config)
@@ -41,10 +43,23 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Serve command doesn't need full config
+    // Serve command loads config for web settings
     if let Commands::Serve(args) = &cli.command {
-        let state_dir = cli.state_dir.unwrap_or_else(default_state_dir);
-        return serve::execute(&state_dir, args.clone()).await;
+        let config_path = cli
+            .config
+            .or_else(default_config_path)
+            .ok_or_else(|| anyhow::anyhow!("no config file found; specify with --config"))?;
+        let (_raw, resolved) = load_config(&config_path)
+            .map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
+        let state_dir = cli
+            .state_dir
+            .or_else(|| {
+                _raw.state
+                    .as_ref()
+                    .and_then(|s| s.dir.as_ref().map(PathBuf::from))
+            })
+            .unwrap_or_else(default_state_dir);
+        return serve::execute(&state_dir, &config_path, resolved, args.clone()).await;
     }
 
     let config_path = cli.config
@@ -62,11 +77,16 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         })?;
 
     // Load config to check for [state].dir
-    let (raw, _resolved) = load_config(&config_path)
-        .map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
+    let (raw, _resolved) =
+        load_config(&config_path).map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
 
-    let state_dir = cli.state_dir
-        .or_else(|| raw.state.as_ref().and_then(|s| s.dir.as_ref().map(PathBuf::from)))
+    let state_dir = cli
+        .state_dir
+        .or_else(|| {
+            raw.state
+                .as_ref()
+                .and_then(|s| s.dir.as_ref().map(PathBuf::from))
+        })
         .unwrap_or_else(default_state_dir);
 
     match cli.command {

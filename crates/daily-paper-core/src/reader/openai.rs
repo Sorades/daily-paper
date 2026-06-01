@@ -42,21 +42,35 @@ impl ReaderClient {
     }
 
     /// Call the chat/completions endpoint.
-    pub async fn complete(&self, system_prompt: &str, user_prompt: &str) -> Result<(String, Option<TokenUsage>)> {
-        let _permit = self.semaphore.acquire().await.map_err(|e| {
-            Error::Llm(format!("semaphore closed: {}", e))
-        })?;
+    pub async fn complete(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<(String, Option<TokenUsage>)> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| Error::Llm(format!("semaphore closed: {}", e)))?;
 
         self.complete_with_retry(system_prompt, user_prompt).await
     }
 
-    async fn complete_with_retry(&self, system_prompt: &str, user_prompt: &str) -> Result<(String, Option<TokenUsage>)> {
+    async fn complete_with_retry(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<(String, Option<TokenUsage>)> {
         let mut last_err = None;
 
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
                 let delay = Duration::from_secs(2u64.pow(attempt));
-                warn!(attempt, delay_secs = delay.as_secs(), "retrying LLM request");
+                warn!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    "retrying LLM request"
+                );
                 tokio::time::sleep(delay).await;
             }
 
@@ -78,7 +92,11 @@ impl ReaderClient {
         Err(last_err.unwrap_or_else(|| Error::Llm("max retries exceeded".into())))
     }
 
-    async fn call_api(&self, system_prompt: &str, user_prompt: &str) -> Result<(String, Option<TokenUsage>)> {
+    async fn call_api(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<(String, Option<TokenUsage>)> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let body = serde_json::json!({
@@ -108,7 +126,9 @@ impl ReaderClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(30);
-            return Err(Error::RateLimited { retry_after_secs: retry_after });
+            return Err(Error::RateLimited {
+                retry_after_secs: retry_after,
+            });
         }
 
         if !resp.status().is_success() {
@@ -130,9 +150,18 @@ impl ReaderClient {
             .to_string();
 
         let usage = resp_body.get("usage").map(|u| TokenUsage {
-            input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
-            output_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
-            total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            input_tokens: u
+                .get("prompt_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
+            output_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
+            total_tokens: u
+                .get("total_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
         });
 
         debug!(content_len = content.len(), "got LLM response");

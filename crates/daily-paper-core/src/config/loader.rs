@@ -1,12 +1,16 @@
-use crate::error::{Error, Result};
 use super::raw::RawConfig;
 use super::resolved::ResolvedConfig;
+use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
 
 /// Load and resolve configuration from a TOML file.
 pub fn load_config(path: &Path) -> Result<(RawConfig, ResolvedConfig)> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        Error::Config(format!("failed to read config file '{}': {}", path.display(), e))
+        Error::Config(format!(
+            "failed to read config file '{}': {}",
+            path.display(),
+            e
+        ))
     })?;
 
     let raw: RawConfig = toml::from_str(&content)?;
@@ -72,10 +76,7 @@ pub fn init_project_dir() -> Result<PathBuf> {
     std::fs::create_dir_all(config_dir.join("templates"))?;
 
     // Write default config
-    std::fs::write(
-        config_dir.join("config.toml"),
-        DEFAULT_CONFIG,
-    )?;
+    std::fs::write(config_dir.join("config.toml"), DEFAULT_CONFIG)?;
 
     // Write default system prompt
     std::fs::write(

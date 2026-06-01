@@ -60,6 +60,57 @@ pub enum StageName {
     Send,
 }
 
+impl StageName {
+    /// Convert from kebab-case string (e.g. "zotero-sync" → ZoteroSync).
+    pub fn from_kebab(s: &str) -> Option<Self> {
+        match s {
+            "zotero-sync" => Some(Self::ZoteroSync),
+            "source-fetch" => Some(Self::SourceFetch),
+            "deduplicate" => Some(Self::Deduplicate),
+            "embedding" => Some(Self::Embedding),
+            "rerank" => Some(Self::Rerank),
+            "pdf-fetch" => Some(Self::PdfFetch),
+            "text-extract" => Some(Self::TextExtract),
+            "metadata-fetch" => Some(Self::MetadataFetch),
+            "deep-read" => Some(Self::DeepRead),
+            "render" => Some(Self::Render),
+            "send" => Some(Self::Send),
+            _ => None,
+        }
+    }
+
+    /// Convert to kebab-case string.
+    pub fn to_kebab(&self) -> &'static str {
+        match self {
+            Self::ZoteroSync => "zotero-sync",
+            Self::SourceFetch => "source-fetch",
+            Self::Deduplicate => "deduplicate",
+            Self::Embedding => "embedding",
+            Self::Rerank => "rerank",
+            Self::PdfFetch => "pdf-fetch",
+            Self::TextExtract => "text-extract",
+            Self::MetadataFetch => "metadata-fetch",
+            Self::DeepRead => "deep-read",
+            Self::Render => "render",
+            Self::Send => "send",
+        }
+    }
+
+    /// All stages in pipeline execution order.
+    pub fn all() -> &'static [StageName] {
+        &[
+            Self::ZoteroSync,
+            Self::SourceFetch,
+            Self::Deduplicate,
+            Self::Embedding,
+            Self::Rerank,
+            Self::DeepRead,
+            Self::Render,
+            Self::Send,
+        ]
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StageStatus {
     Pending,
@@ -100,4 +151,27 @@ pub struct WarningRecord {
     pub kind: String,
     pub message: String,
     pub context: serde_json::Value,
+}
+
+/// Real-time pipeline event for SSE streaming.
+#[derive(Debug, Clone, Serialize)]
+pub enum PipelineEvent {
+    Started {
+        run_id: String,
+    },
+    StageStart {
+        run_id: String,
+        stage: StageName,
+    },
+    StageEnd {
+        run_id: String,
+        stage: StageName,
+        status: StageStatus,
+        cache_hit: bool,
+        duration_ms: u64,
+    },
+    Ended {
+        run_id: String,
+        status: RunStatus,
+    },
 }

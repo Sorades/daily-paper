@@ -1,7 +1,7 @@
 mod common;
 
-use wiremock::{Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 /// Test Zotero client fetches items correctly.
 #[tokio::test]
@@ -59,7 +59,7 @@ async fn test_zotero_429_retry() {
         .respond_with(
             ResponseTemplate::new(200)
                 .append_header("Last-Modified-Version", "42")
-                .set_body_string("[]")
+                .set_body_string("[]"),
         )
         .expect(1)
         .mount(&server)
@@ -82,11 +82,9 @@ async fn test_arxiv_fetch_papers() {
     let server = common::start_mock_server().await;
     common::setup_arxiv_mock(&server).await;
 
-    let client = daily_paper_core::source::arxiv::client::ArxivClient::new(
-        vec!["cs.AI".to_string()],
-        false,
-    )
-    .with_base_url(&format!("{}/api/query", server.uri()));
+    let client =
+        daily_paper_core::source::arxiv::client::ArxivClient::new(vec!["cs.AI".to_string()], false)
+            .with_base_url(&format!("{}/api/query", server.uri()));
 
     let start = chrono::NaiveDate::from_ymd_opt(2023, 1, 30)
         .unwrap()
@@ -149,12 +147,9 @@ async fn test_embedding_429_retry() {
     let embedding: Vec<f32> = (0..5).map(|i| i as f32 * 0.1).collect();
     Mock::given(method("POST"))
         .and(path("/v1/embeddings"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({
-                    "data": [{"embedding": embedding}]
-                }))
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{"embedding": embedding}]
+        })))
         .expect(1)
         .mount(&server)
         .await;
@@ -190,7 +185,10 @@ async fn test_reader_complete() {
         4000,
     );
 
-    let (summary, usage) = client.complete("system prompt", "user prompt").await.unwrap();
+    let (summary, usage) = client
+        .complete("system prompt", "user prompt")
+        .await
+        .unwrap();
     assert!(summary.contains("注意力机制"));
     assert!(usage.is_some());
     let usage = usage.unwrap();

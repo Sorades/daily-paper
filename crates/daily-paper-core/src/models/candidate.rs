@@ -120,7 +120,12 @@ mod tests {
     #[test]
     fn make_paper_id_priority() {
         assert_eq!(
-            make_paper_id(Some("10.1234/abc"), Some("2301.12345"), &PaperSourceKind::Arxiv, "1"),
+            make_paper_id(
+                Some("10.1234/abc"),
+                Some("2301.12345"),
+                &PaperSourceKind::Arxiv,
+                "1"
+            ),
             "doi:10.1234/abc"
         );
         assert_eq!(

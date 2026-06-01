@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "daily-paper", version, about = "Daily paper recommendation and deep reading pipeline")]
+#[command(
+    name = "daily-paper",
+    version,
+    about = "Daily paper recommendation and deep reading pipeline"
+)]
 pub struct Cli {
     /// Path to config file
     #[arg(long)]
@@ -32,6 +36,15 @@ pub struct RunArgs {
     /// Date to fetch papers for (YYYY-MM-DD)
     #[arg(long)]
     pub date: Option<String>,
+
+    /// Run only specific stage(s). Can be repeated.
+    /// Stages: zotero-sync, source-fetch, deduplicate, embedding, rerank, deep-read, render, send
+    #[arg(long = "stage")]
+    pub stages: Vec<String>,
+
+    /// When using --stage, load cached data from this run id (defaults to latest run)
+    #[arg(long)]
+    pub from_run: Option<String>,
 
     /// Execute pipeline but do not send email (same as default in dev)
     #[arg(long)]
@@ -75,7 +88,7 @@ pub struct StatusArgs {
 
 #[derive(Parser, Clone)]
 pub struct ServeArgs {
-    /// Port to listen on
-    #[arg(long, default_value = "3000")]
-    pub port: u16,
+    /// Override port to listen on (default: from config or 8991)
+    #[arg(long)]
+    pub port: Option<u16>,
 }

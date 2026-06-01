@@ -18,7 +18,10 @@ pub fn zotero_item_to_library_paper(item: &serde_json::Value) -> Option<LibraryP
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let abstract_text = data.get("abstractNote").and_then(|v| v.as_str()).map(String::from);
+    let abstract_text = data
+        .get("abstractNote")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let year = data
         .get("date")
         .and_then(|v| v.as_str())
@@ -41,7 +44,10 @@ pub fn zotero_item_to_library_paper(item: &serde_json::Value) -> Option<LibraryP
     let tags = extract_tags(data);
     let attachments = extract_attachments(data);
     let collection_keys = extract_collection_keys(data);
-    let is_trashed = data.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_trashed = data
+        .get("deleted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let parent_item = data
         .get("parentItem")
         .and_then(|v| v.as_str())
@@ -57,10 +63,7 @@ pub fn zotero_item_to_library_paper(item: &serde_json::Value) -> Option<LibraryP
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
 
-    let version_key = item
-        .get("version")
-        .and_then(|v| v.as_u64())
-        .or(version);
+    let version_key = item.get("version").and_then(|v| v.as_u64()).or(version);
 
     Some(LibraryPaper {
         library_id: key.to_string(),
@@ -109,7 +112,10 @@ fn extract_authors(data: &serde_json::Value) -> Vec<Author> {
     creators
         .iter()
         .filter_map(|c| {
-            let creator_type = c.get("creatorType").and_then(|v| v.as_str()).unwrap_or("author");
+            let creator_type = c
+                .get("creatorType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("author");
             if creator_type != "author" && creator_type != "editor" {
                 return None;
             }
@@ -259,6 +265,9 @@ mod tests {
             super::extract_arxiv_id_from_url("https://arxiv.org/abs/2301.12345v2"),
             Some("2301.12345v2".into())
         );
-        assert_eq!(super::extract_arxiv_id_from_url("https://example.com"), None);
+        assert_eq!(
+            super::extract_arxiv_id_from_url("https://example.com"),
+            None
+        );
     }
 }

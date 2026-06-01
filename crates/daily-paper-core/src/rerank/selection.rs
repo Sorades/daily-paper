@@ -94,6 +94,9 @@ mod tests {
     fn candidate_set_hash_order_independent() {
         let ids1 = vec!["a".into(), "b".into(), "c".into()];
         let ids2 = vec!["c".into(), "a".into(), "b".into()];
-        assert_eq!(compute_candidate_set_hash(&ids1), compute_candidate_set_hash(&ids2));
+        assert_eq!(
+            compute_candidate_set_hash(&ids1),
+            compute_candidate_set_hash(&ids2)
+        );
     }
 }

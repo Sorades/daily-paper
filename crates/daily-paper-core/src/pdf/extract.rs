@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
-use crate::models::pdf::{ExtractedText, compute_text_extract_key};
+use crate::models::pdf::{compute_text_extract_key, ExtractedText};
 
 use super::section::parse_sections;
 
@@ -78,12 +78,7 @@ pub async fn extract_text(
     std::fs::create_dir_all(output_dir)?;
     std::fs::write(&text_file, &text)?;
 
-    let text_extract_key = compute_text_extract_key(
-        pdf_sha256,
-        "pdftotext",
-        "layout",
-        "v1",
-    );
+    let text_extract_key = compute_text_extract_key(pdf_sha256, "pdftotext", "layout", "v1");
 
     Ok(ExtractedText {
         text_extract_key,

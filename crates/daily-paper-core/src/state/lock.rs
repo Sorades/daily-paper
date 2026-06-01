@@ -1,8 +1,8 @@
+use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use crate::error::{Error, Result};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockInfo {
@@ -82,11 +82,9 @@ impl RunLock {
                 file.flush()?;
                 Ok(RunLock { lock_path })
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(Error::Config(
-                    "failed to acquire lock: another process acquired it first".into(),
-                ))
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(Error::Config(
+                "failed to acquire lock: another process acquired it first".into(),
+            )),
             Err(e) => Err(Error::Storage(e)),
         }
     }

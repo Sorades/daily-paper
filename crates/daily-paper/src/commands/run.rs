@@ -5,16 +5,16 @@ use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
 use tracing::{debug, info, warn};
 
 use crate::cli::RunArgs;
-use daily_paper_core::config::ResolvedConfig;
 use daily_paper_core::config::load_config;
+use daily_paper_core::config::ResolvedConfig;
 use daily_paper_core::embedding::openai::EmbeddingClient;
 use daily_paper_core::metadata::fetcher::extract_from_source;
 use daily_paper_core::models::candidate::CandidatePaper;
-use daily_paper_core::models::common::{DateWindow, sha256_hex};
+use daily_paper_core::models::common::{sha256_hex, DateWindow};
 use daily_paper_core::models::dedup::{DedupResult, DuplicateReason, ExistingLibraryMatch};
 use daily_paper_core::models::interest::{InterestPaperRef, InterestProfile};
-use daily_paper_core::models::read::{ReadResult, PaperMetadataSummary, compute_read_cache_key};
-use daily_paper_core::models::report::{RenderedReport, compute_delivery_key};
+use daily_paper_core::models::read::{compute_read_cache_key, PaperMetadataSummary, ReadResult};
+use daily_paper_core::models::report::{compute_delivery_key, RenderedReport};
 use daily_paper_core::models::run::*;
 use daily_paper_core::models::zotero::ZoteroSnapshot;
 use daily_paper_core::pdf::download::download_pdf;
@@ -24,7 +24,7 @@ use daily_paper_core::reader::openai::ReaderClient;
 use daily_paper_core::reader::template::{
     build_system_prompt, build_user_prompt, compute_template_hash, trim_to_token_budget,
 };
-use daily_paper_core::render::html::{ReportPaper, render_html};
+use daily_paper_core::render::html::{render_html, ReportPaper};
 use daily_paper_core::render::text::render_text;
 use daily_paper_core::rerank::cosine::rerank;
 use daily_paper_core::rerank::selection::{
@@ -49,6 +49,37 @@ pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> any
     let store = FileStateStore::new(state_dir.to_path_buf());
     store.ensure_dirs()?;
 
+    // Parse --stage filter
+    let stage_filter: Option<Vec<StageName>> = if args.stages.is_empty() {
+        None
+    } else {
+        let mut stages = Vec::new();
+        for s in &args.stages {
+            let stage = StageName::from_kebab(s).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown stage '{}'. Valid: zotero-sync, source-fetch, deduplicate, embedding, rerank, deep-read, render, send",
+                    s
+                )
+            })?;
+            stages.push(stage);
+        }
+        Some(stages)
+    };
+
+    // If --stage is specified, load source run manifest for cached data
+    let source_manifest: Option<RunManifest> = if stage_filter.is_some() {
+        let source_run_id = find_source_run(&store, args.from_run.as_deref())?;
+        info!(source_run = %source_run_id, "loading source run for cached data");
+        let manifest_path = StatePath::new(format!("runs/{}/manifest.json", source_run_id))?;
+        let m: Option<RunManifest> = store.read_json(&manifest_path)?;
+        if m.is_none() {
+            warn!("source run manifest not found, stages will need to re-fetch data");
+        }
+        m
+    } else {
+        None
+    };
+
     let run_id = generate_run_id();
     info!(run_id = %run_id, "starting pipeline run");
 
@@ -62,7 +93,7 @@ pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> any
 
     let mut manifest = RunManifest {
         run_id: run_id.clone(),
-        parent_run_id: None,
+        parent_run_id: source_manifest.as_ref().map(|m| m.run_id.clone()),
         status: RunStatus::Running,
         started_at: Utc::now(),
         finished_at: None,
@@ -81,7 +112,19 @@ pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> any
         .acquire_lock(&run_id, std::time::Duration::from_secs(3600))
         .context("failed to acquire run lock")?;
 
-    let result = run_pipeline(&store, &resolved, &mut manifest, &args, &run_id, &date_window).await;
+    let result = run_pipeline(
+        &store,
+        &resolved,
+        &mut manifest,
+        &args,
+        &run_id,
+        &date_window,
+        stage_filter.as_deref(),
+        source_manifest.as_ref(),
+        None,
+        &manifest_path,
+    )
+    .await;
 
     manifest.finished_at = Some(Utc::now());
     match &result {
@@ -106,19 +149,43 @@ pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> any
     result
 }
 
-async fn run_pipeline(
+#[allow(clippy::too_many_arguments)]
+pub async fn run_pipeline(
     store: &FileStateStore,
     config: &ResolvedConfig,
     manifest: &mut RunManifest,
     args: &RunArgs,
     run_id: &str,
     date_window: &DateWindow,
+    stage_filter: Option<&[StageName]>,
+    source_manifest: Option<&RunManifest>,
+    event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
+    manifest_path: &StatePath,
 ) -> anyhow::Result<()> {
+    let should_run =
+        |stage: &StageName| -> bool { stage_filter.map(|f| f.contains(stage)).unwrap_or(true) };
+
     // Stage 1: Zotero sync
-    let snapshot = stage_zotero_sync(store, config, manifest, args.force_zotero_sync).await?;
+    let snapshot = if should_run(&StageName::ZoteroSync) {
+        emit_event(event_tx, run_id, StageName::ZoteroSync, true);
+        let r = stage_zotero_sync(store, config, manifest, args.force_zotero_sync).await;
+        emit_stage_end(event_tx, manifest, run_id, StageName::ZoteroSync, &r);
+        let _ = store.write_json(manifest_path, manifest);
+        r?
+    } else {
+        load_cached_snapshot(store, source_manifest)?
+    };
 
     // Stage 2: Source fetch
-    let candidates = stage_source_fetch(store, config, manifest, date_window).await?;
+    let candidates = if should_run(&StageName::SourceFetch) {
+        emit_event(event_tx, run_id, StageName::SourceFetch, true);
+        let r = stage_source_fetch(store, config, manifest, date_window).await;
+        emit_stage_end(event_tx, manifest, run_id, StageName::SourceFetch, &r);
+        let _ = store.write_json(manifest_path, manifest);
+        r?
+    } else {
+        load_cached_candidates(store, source_manifest)?
+    };
 
     if candidates.is_empty() {
         warn!("no candidate papers found for date window");
@@ -127,7 +194,15 @@ async fn run_pipeline(
     }
 
     // Stage 3: Deduplicate
-    let mut dedup = stage_deduplicate(store, manifest, run_id, &candidates, &snapshot).await?;
+    let mut dedup = if should_run(&StageName::Deduplicate) {
+        emit_event(event_tx, run_id, StageName::Deduplicate, true);
+        let r = stage_deduplicate(store, manifest, run_id, &candidates, &snapshot).await;
+        emit_stage_end(event_tx, manifest, run_id, StageName::Deduplicate, &r);
+        let _ = store.write_json(manifest_path, manifest);
+        r?
+    } else {
+        load_cached_dedup(store, source_manifest, &candidates, &snapshot)?
+    };
 
     if dedup.candidates.is_empty() {
         warn!("all candidates were duplicates");
@@ -138,26 +213,45 @@ async fn run_pipeline(
     // Limit candidates if --max-candidates is set
     if let Some(max) = args.max_candidates {
         if dedup.candidates.len() > max {
-            info!(limit = max, total = dedup.candidates.len(), "limiting candidates");
+            info!(
+                limit = max,
+                total = dedup.candidates.len(),
+                "limiting candidates"
+            );
             dedup.candidates.truncate(max);
         }
     }
 
     // Stage 4: Embedding
-    let (candidate_embs, library_embs) =
-        stage_embedding(store, config, manifest, &dedup.candidates, &snapshot).await?;
+    let (candidate_embs, library_embs) = if should_run(&StageName::Embedding) {
+        emit_event(event_tx, run_id, StageName::Embedding, true);
+        let r = stage_embedding(store, config, manifest, &dedup.candidates, &snapshot).await;
+        emit_stage_end(event_tx, manifest, run_id, StageName::Embedding, &r);
+        let _ = store.write_json(manifest_path, manifest);
+        r?
+    } else {
+        load_cached_embeddings(store, source_manifest, &dedup.candidates, &snapshot)?
+    };
 
     // Stage 5: Rerank + selection
-    let (selection, rerank_scores) = stage_rerank(
-        store,
-        config,
-        manifest,
-        &dedup.candidates,
-        &candidate_embs,
-        &library_embs,
-        &snapshot,
-    )
-    .await?;
+    let (selection, rerank_scores) = if should_run(&StageName::Rerank) {
+        emit_event(event_tx, run_id, StageName::Rerank, true);
+        let r = stage_rerank(
+            store,
+            config,
+            manifest,
+            &dedup.candidates,
+            &candidate_embs,
+            &library_embs,
+            &snapshot,
+        )
+        .await;
+        emit_stage_end(event_tx, manifest, run_id, StageName::Rerank, &r);
+        let _ = store.write_json(manifest_path, manifest);
+        r?
+    } else {
+        load_cached_rerank(store, source_manifest)?
+    };
 
     if selection.selected_paper_ids.is_empty() {
         warn!("no papers selected after rerank");
@@ -166,59 +260,81 @@ async fn run_pipeline(
     }
 
     // Stage 6-9: Deep read (PDF + extract + metadata + LLM)
-    let read_results = stage_deep_read(
-        store,
-        config,
-        manifest,
-        &selection.selected_paper_ids,
-        &dedup.candidates,
-        args.force_read,
-    )
-    .await?;
+    let read_results = if should_run(&StageName::DeepRead) {
+        emit_event(event_tx, run_id, StageName::DeepRead, true);
+        let r = stage_deep_read(
+            store,
+            config,
+            manifest,
+            &selection.selected_paper_ids,
+            &dedup.candidates,
+            args.force_read,
+        )
+        .await;
+        emit_stage_end(event_tx, manifest, run_id, StageName::DeepRead, &r);
+        let _ = store.write_json(manifest_path, manifest);
+        r?
+    } else {
+        load_cached_read_results(store, source_manifest)?
+    };
 
     // Stage 10: Render
-    let (html_path, text_path) = stage_render(
-        store,
-        manifest,
-        run_id,
-        &selection.selected_paper_ids,
-        &dedup.candidates,
-        &read_results,
-        &rerank_scores,
-    )
-    .await?;
+    let (html_path, text_path) = if should_run(&StageName::Render) {
+        emit_event(event_tx, run_id, StageName::Render, true);
+        let r = stage_render(
+            store,
+            manifest,
+            run_id,
+            &selection.selected_paper_ids,
+            &dedup.candidates,
+            &read_results,
+            &rerank_scores,
+        )
+        .await;
+        emit_stage_end(event_tx, manifest, run_id, StageName::Render, &r);
+        let _ = store.write_json(manifest_path, manifest);
+        r?
+    } else {
+        load_cached_render(store, source_manifest, run_id)?
+    };
 
     // Stage 11: Send
     // Dev (debug): skip email unless --send-email
     // Release: send email unless --no-email or --dry-run
-    let should_send = if args.dry_run || args.no_email {
-        false
-    } else if args.send_email {
-        true
-    } else if cfg!(debug_assertions) {
-        false // dev default: don't send
-    } else {
-        true // release default: send
-    };
-
-    if !should_send {
-        if args.dry_run {
-            info!("dry-run: skipping email send");
+    if should_run(&StageName::Send) {
+        let should_send = if args.dry_run || args.no_email {
+            false
+        } else if args.send_email {
+            true
+        } else if cfg!(debug_assertions) {
+            false // dev default: don't send
         } else {
-            info!("email skipped (use --send-email to deliver in dev)");
+            true // release default: send
+        };
+
+        if !should_send {
+            if args.dry_run {
+                info!("dry-run: skipping email send");
+            } else {
+                info!("email skipped (use --send-email to deliver in dev)");
+            }
+            skip_stage(manifest, StageName::Send);
+        } else {
+            emit_event(event_tx, run_id, StageName::Send, true);
+            let r = stage_send(
+                store,
+                config,
+                manifest,
+                run_id,
+                &html_path,
+                text_path.as_deref(),
+                args.force_send,
+            )
+            .await;
+            emit_stage_end(event_tx, manifest, run_id, StageName::Send, &r);
+            let _ = store.write_json(manifest_path, manifest);
+            r?
         }
-        skip_stage(manifest, StageName::Send);
-    } else {
-        stage_send(
-            store,
-            config,
-            manifest,
-            run_id,
-            &html_path,
-            text_path.as_deref(),
-            args.force_send,
-        )
-        .await?;
     }
 
     Ok(())
@@ -256,10 +372,8 @@ async fn stage_zotero_sync(
             {
                 let age = Utc::now() - last_success;
                 if age < Duration::hours(config.zotero.max_snapshot_age_hours as i64) {
-                    let snap_path = StatePath::new(format!(
-                        "cache/zotero/snapshots/{}.json",
-                        snapshot_id
-                    ))?;
+                    let snap_path =
+                        StatePath::new(format!("cache/zotero/snapshots/{}.json", snapshot_id))?;
                     if let Some(snapshot) = store.read_json::<ZoteroSnapshot>(&snap_path)? {
                         info!(
                             snapshot_id = %snapshot_id,
@@ -281,7 +395,9 @@ async fn stage_zotero_sync(
     info!("syncing Zotero library...");
     let client = ZoteroClient::new(config.zotero.user_id.clone(), config.zotero.api_key.clone());
 
-    let library_version = client.get_library_version().await
+    let library_version = client
+        .get_library_version()
+        .await
         .context("failed to get Zotero library version")?;
 
     let since_version = if force {
@@ -290,10 +406,14 @@ async fn stage_zotero_sync(
         sync_state.as_ref().and_then(|s| s.library_version)
     };
 
-    let items = client.fetch_items(since_version).await
+    let items = client
+        .fetch_items(since_version)
+        .await
         .context("failed to fetch Zotero items")?;
 
-    let collections = client.fetch_collections().await
+    let collections = client
+        .fetch_collections()
+        .await
         .context("failed to fetch Zotero collections")?;
 
     let collection_paths = build_collection_paths(&collections);
@@ -305,10 +425,12 @@ async fn stage_zotero_sync(
             // Fill in collection paths
             for ck in &paper.collection_keys {
                 if let Some(path) = collection_paths.get(ck) {
-                    paper.collections.push(daily_paper_core::models::zotero::CollectionPath {
-                        key: ck.clone(),
-                        path: path.clone(),
-                    });
+                    paper
+                        .collections
+                        .push(daily_paper_core::models::zotero::CollectionPath {
+                            key: ck.clone(),
+                            path: path.clone(),
+                        });
                 }
             }
             Some(paper)
@@ -466,12 +588,20 @@ async fn stage_deduplicate(
     let lib_dois: std::collections::HashSet<String> = snapshot
         .items
         .iter()
-        .filter_map(|p| p.doi.as_ref().map(|d| daily_paper_core::models::candidate::normalize_doi(d)))
+        .filter_map(|p| {
+            p.doi
+                .as_ref()
+                .map(|d| daily_paper_core::models::candidate::normalize_doi(d))
+        })
         .collect();
     let lib_arxiv: std::collections::HashSet<String> = snapshot
         .items
         .iter()
-        .filter_map(|p| p.arxiv_id.as_ref().map(|a| daily_paper_core::models::candidate::normalize_arxiv_id(a)))
+        .filter_map(|p| {
+            p.arxiv_id
+                .as_ref()
+                .map(|a| daily_paper_core::models::candidate::normalize_arxiv_id(a))
+        })
         .collect();
 
     for candidate in candidates {
@@ -480,7 +610,10 @@ async fn stage_deduplicate(
             let norm = daily_paper_core::models::candidate::normalize_doi(doi);
             if lib_dois.contains(&norm) {
                 if let Some(lib_paper) = snapshot.items.iter().find(|p| {
-                    p.doi.as_ref().map(|d| daily_paper_core::models::candidate::normalize_doi(d)) == Some(norm.clone())
+                    p.doi
+                        .as_ref()
+                        .map(|d| daily_paper_core::models::candidate::normalize_doi(d))
+                        == Some(norm.clone())
                 }) {
                     skipped_existing.push(ExistingLibraryMatch {
                         candidate_paper_id: candidate.paper_id.clone(),
@@ -496,7 +629,10 @@ async fn stage_deduplicate(
             let norm = daily_paper_core::models::candidate::normalize_arxiv_id(arxiv_id);
             if lib_arxiv.contains(&norm) {
                 if let Some(lib_paper) = snapshot.items.iter().find(|p| {
-                    p.arxiv_id.as_ref().map(|a| daily_paper_core::models::candidate::normalize_arxiv_id(a)) == Some(norm.clone())
+                    p.arxiv_id
+                        .as_ref()
+                        .map(|a| daily_paper_core::models::candidate::normalize_arxiv_id(a))
+                        == Some(norm.clone())
                 }) {
                     skipped_existing.push(ExistingLibraryMatch {
                         candidate_paper_id: candidate.paper_id.clone(),
@@ -596,7 +732,8 @@ async fn stage_embedding(
 
     // Check cache for candidates
     for (i, candidate) in candidates.iter().enumerate() {
-        let input_text = EmbeddingClient::make_input_text(&candidate.title, &candidate.abstract_text);
+        let input_text =
+            EmbeddingClient::make_input_text(&candidate.title, &candidate.abstract_text);
         let input_hash = EmbeddingClient::compute_input_hash(
             provider_id,
             &config.embedding.model,
@@ -622,15 +759,17 @@ async fn stage_embedding(
         let batch_size = config.embedding.batch_size;
         let cache_dir = store.root().join("cache").to_path_buf();
         let texts = all_texts.clone();
-        Some(tokio::task::spawn_blocking(move || {
-            let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
-                &model_name,
-                batch_size,
-                Some(&cache_dir),
-            )?;
-            client.embed_batch(&texts)
-        })
-        .await??)
+        Some(
+            tokio::task::spawn_blocking(move || {
+                let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
+                    &model_name,
+                    batch_size,
+                    Some(&cache_dir),
+                )?;
+                client.embed_batch(&texts)
+            })
+            .await??,
+        )
     } else if !is_local && !all_texts.is_empty() {
         info!(count = all_texts.len(), "embedding with remote API");
         let client = EmbeddingClient::new(
@@ -652,7 +791,8 @@ async fn stage_embedding(
 
     // Add cached candidates
     for candidate in candidates {
-        let input_text = EmbeddingClient::make_input_text(&candidate.title, &candidate.abstract_text);
+        let input_text =
+            EmbeddingClient::make_input_text(&candidate.title, &candidate.abstract_text);
         let input_hash = EmbeddingClient::compute_input_hash(
             provider_id,
             &config.embedding.model,
@@ -679,8 +819,14 @@ async fn stage_embedding(
 
     // Sort by original order
     candidate_embs.sort_by(|a, b| {
-        let ia = candidates.iter().position(|c| c.paper_id == a.0).unwrap_or(0);
-        let ib = candidates.iter().position(|c| c.paper_id == b.0).unwrap_or(0);
+        let ia = candidates
+            .iter()
+            .position(|c| c.paper_id == a.0)
+            .unwrap_or(0);
+        let ib = candidates
+            .iter()
+            .position(|c| c.paper_id == b.0)
+            .unwrap_or(0);
         ia.cmp(&ib)
     });
 
@@ -690,7 +836,11 @@ async fn stage_embedding(
     let mut uncached_library: Vec<(String, f32, String, StatePath)> = Vec::new(); // (lib_id, weight, text, vec_path)
 
     for pref in &profile.papers {
-        if let Some(lib_paper) = snapshot.items.iter().find(|p| p.library_id == pref.library_id) {
+        if let Some(lib_paper) = snapshot
+            .items
+            .iter()
+            .find(|p| p.library_id == pref.library_id)
+        {
             let input_text = match (&lib_paper.title, &lib_paper.abstract_text) {
                 (t, Some(a)) if !a.is_empty() => EmbeddingClient::make_input_text(t, a),
                 _ => continue,
@@ -713,8 +863,14 @@ async fn stage_embedding(
 
     // Batch embed uncached library papers
     if !uncached_library.is_empty() {
-        info!(count = uncached_library.len(), "embedding uncached library papers");
-        let texts: Vec<String> = uncached_library.iter().map(|(_, _, t, _)| t.clone()).collect();
+        info!(
+            count = uncached_library.len(),
+            "embedding uncached library papers"
+        );
+        let texts: Vec<String> = uncached_library
+            .iter()
+            .map(|(_, _, t, _)| t.clone())
+            .collect();
 
         let embeddings = if is_local {
             let model_name = config.embedding.model.clone();
@@ -770,7 +926,10 @@ async fn stage_rerank(
     candidate_embs: &[(String, Vec<f32>)],
     library_embs: &[(String, Vec<f32>, f32)],
     snapshot: &ZoteroSnapshot,
-) -> anyhow::Result<(daily_paper_core::rerank::selection::ReadSelection, Vec<(String, f32)>)> {
+) -> anyhow::Result<(
+    daily_paper_core::rerank::selection::ReadSelection,
+    Vec<(String, f32)>,
+)> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
         stage: StageName::Rerank,
@@ -888,7 +1047,13 @@ async fn stage_deep_read(
 
         // Check read result cache
         let pdf_dir = paper_dir.join(paper_id);
-        let read_cache_path = find_cached_read_result(store, paper_id, &template_hash, &config.reader.model, &config.reader.language)?;
+        let read_cache_path = find_cached_read_result(
+            store,
+            paper_id,
+            &template_hash,
+            &config.reader.model,
+            &config.reader.language,
+        )?;
 
         if !force_read {
             if let Some(ref path) = read_cache_path {
@@ -922,7 +1087,10 @@ async fn stage_deep_read(
             Ok(a) => a,
             Err(e) => {
                 warn!(paper_id = %paper_id, error = %e, "PDF download failed");
-                mark_stage_blocked(manifest, &format!("PDF download failed for {}: {}", paper_id, e));
+                mark_stage_blocked(
+                    manifest,
+                    &format!("PDF download failed for {}: {}", paper_id, e),
+                );
                 any_failure = true;
                 continue;
             }
@@ -942,7 +1110,10 @@ async fn stage_deep_read(
             Ok(e) => e,
             Err(e) => {
                 warn!(paper_id = %paper_id, error = %e, "PDF extract failed");
-                mark_stage_blocked(manifest, &format!("PDF extract failed for {}: {}", paper_id, e));
+                mark_stage_blocked(
+                    manifest,
+                    &format!("PDF extract failed for {}: {}", paper_id, e),
+                );
                 any_failure = true;
                 continue;
             }
@@ -952,8 +1123,8 @@ async fn stage_deep_read(
         let metadata = extract_from_source(paper_id, &candidate.source_metadata);
 
         // Build prompt
-        let full_text = std::fs::read_to_string(Path::new(&extracted.text_path))
-            .unwrap_or_default();
+        let full_text =
+            std::fs::read_to_string(Path::new(&extracted.text_path)).unwrap_or_default();
         let sections = parse_sections(&full_text);
         let selected_text = select_sections_for_reading(
             &full_text,
@@ -980,19 +1151,26 @@ async fn stage_deep_read(
         let trimmed_prompt = trim_to_token_budget(&user_prompt, config.reader.max_input_tokens * 4);
 
         // Call LLM
-        let (raw_response, token_usage) = match reader.complete(&system_prompt, &trimmed_prompt).await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(paper_id = %paper_id, error = %e, "LLM read failed");
-                mark_stage_blocked(manifest, &format!("LLM read failed for {}: {}", paper_id, e));
-                any_failure = true;
-                continue;
-            }
-        };
+        let (raw_response, token_usage) =
+            match reader.complete(&system_prompt, &trimmed_prompt).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(paper_id = %paper_id, error = %e, "LLM read failed");
+                    mark_stage_blocked(
+                        manifest,
+                        &format!("LLM read failed for {}: {}", paper_id, e),
+                    );
+                    any_failure = true;
+                    continue;
+                }
+            };
 
         // Parse LLM output (JSON with structured summary and affiliations)
         let parsed = daily_paper_core::reader::template::parse_llm_output(&raw_response);
-        let summary = parsed.as_ref().map(|p| p.summary.clone()).unwrap_or_else(|| raw_response.clone());
+        let summary = parsed
+            .as_ref()
+            .map(|p| p.summary.clone())
+            .unwrap_or_else(|| raw_response.clone());
         let author_affiliations = parsed
             .as_ref()
             .map(|p| {
@@ -1097,7 +1275,10 @@ async fn stage_render(
         .enumerate()
         .filter_map(|(i, paper_id)| {
             let candidate = candidates.iter().find(|c| &c.paper_id == paper_id)?;
-            let read_result = read_results.iter().find(|r| &r.paper_id == paper_id).cloned();
+            let read_result = read_results
+                .iter()
+                .find(|r| &r.paper_id == paper_id)
+                .cloned();
 
             Some(ReportPaper {
                 paper_id: paper_id.clone(),
@@ -1108,7 +1289,11 @@ async fn stage_render(
                 landing_url: candidate.landing_url.clone(),
                 pdf_url: candidate.pdf_url.clone(),
                 read_result,
-                score: scores.iter().find(|(id, _)| id == paper_id).map(|(_, s)| *s).unwrap_or(0.0),
+                score: scores
+                    .iter()
+                    .find(|(id, _)| id == paper_id)
+                    .map(|(_, s)| *s)
+                    .unwrap_or(0.0),
             })
         })
         .collect();
@@ -1513,5 +1698,219 @@ fn classify_error(e: &anyhow::Error) -> ErrorKind {
         ErrorKind::SourceUnavailable
     } else {
         ErrorKind::Storage
+    }
+}
+
+// ── Pipeline event helpers ───────────────────────────────────────────
+
+fn emit_event(
+    event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
+    run_id: &str,
+    stage: StageName,
+    _is_start: bool,
+) {
+    if let Some(tx) = event_tx {
+        let _ = tx.send(PipelineEvent::StageStart {
+            run_id: run_id.to_string(),
+            stage,
+        });
+    }
+}
+
+fn emit_stage_end<T>(
+    event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
+    manifest: &RunManifest,
+    run_id: &str,
+    stage: StageName,
+    result: &anyhow::Result<T>,
+) {
+    if let Some(tx) = event_tx {
+        let record = manifest.stages.iter().find(|s| s.stage == stage);
+        let (status, cache_hit, duration_ms) = if let Some(r) = record {
+            let ms = r
+                .finished_at
+                .map(|f| (f - r.started_at).num_milliseconds().max(0) as u64)
+                .unwrap_or(0);
+            (r.status.clone(), r.cache_hit, ms)
+        } else {
+            let status = if result.is_ok() {
+                StageStatus::Succeeded
+            } else {
+                StageStatus::Failed
+            };
+            (status, false, 0u64)
+        };
+        let _ = tx.send(PipelineEvent::StageEnd {
+            run_id: run_id.to_string(),
+            stage,
+            status,
+            cache_hit,
+            duration_ms,
+        });
+    }
+}
+
+// ── Cached data loaders for --stage ─────────────────────────────────
+
+fn find_source_run(store: &FileStateStore, from_run: Option<&str>) -> anyhow::Result<String> {
+    if let Some(id) = from_run {
+        return Ok(id.to_string());
+    }
+    // Find latest run with a manifest
+    let runs_dir = store.root().join("runs");
+    if !runs_dir.exists() {
+        anyhow::bail!("no runs found");
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(&runs_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().join("manifest.json").exists())
+        .collect();
+    entries.sort_by(|a, b| {
+        b.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .cmp(
+                &a.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            )
+    });
+    entries
+        .first()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .ok_or_else(|| anyhow::anyhow!("no runs found"))
+}
+
+fn load_cached_snapshot(
+    store: &FileStateStore,
+    source: Option<&RunManifest>,
+) -> anyhow::Result<ZoteroSnapshot> {
+    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached snapshot"))?;
+    let snap_ref = source
+        .stages
+        .iter()
+        .find(|s| s.stage == StageName::ZoteroSync)
+        .and_then(|s| s.output_ref.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("source run has no ZoteroSync output"))?;
+    let path = StatePath::new(format!("cache/zotero/snapshots/{}.json", snap_ref))?;
+    store
+        .read_json(&path)?
+        .ok_or_else(|| anyhow::anyhow!("cached snapshot not found: {}", snap_ref))
+}
+
+fn load_cached_candidates(
+    store: &FileStateStore,
+    source: Option<&RunManifest>,
+) -> anyhow::Result<Vec<CandidatePaper>> {
+    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached candidates"))?;
+    let hash = match source
+        .stages
+        .iter()
+        .find(|s| s.stage == StageName::SourceFetch)
+        .and_then(|s| s.output_ref.as_deref())
+    {
+        Some(h) => h,
+        None => return Ok(Vec::new()), // source run had no candidates
+    };
+    let path = StatePath::new(format!("cache/arxiv/{}.json", hash))?;
+    Ok(store.read_json(&path)?.unwrap_or_default())
+}
+
+fn load_cached_dedup(
+    store: &FileStateStore,
+    source: Option<&RunManifest>,
+    candidates: &[CandidatePaper],
+    snapshot: &ZoteroSnapshot,
+) -> anyhow::Result<DedupResult> {
+    let _ = (store, snapshot);
+    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached dedup"))?;
+    warn!("loading cached dedup: re-running deduplicate with current data");
+    let kept = candidates.to_vec();
+    Ok(DedupResult {
+        run_id: source.run_id.clone(),
+        candidates: kept,
+        duplicates: Vec::new(),
+        skipped_existing: Vec::new(),
+    })
+}
+
+#[allow(clippy::type_complexity)]
+fn load_cached_embeddings(
+    store: &FileStateStore,
+    source: Option<&RunManifest>,
+    candidates: &[CandidatePaper],
+    snapshot: &ZoteroSnapshot,
+) -> anyhow::Result<(Vec<(String, Vec<f32>)>, Vec<(String, Vec<f32>, f32)>)> {
+    let _ = (store, source, candidates, snapshot);
+    anyhow::bail!("loading cached embeddings not yet supported; re-run with --stage embedding")
+}
+
+fn load_cached_rerank(
+    store: &FileStateStore,
+    source: Option<&RunManifest>,
+) -> anyhow::Result<(
+    daily_paper_core::rerank::selection::ReadSelection,
+    Vec<(String, f32)>,
+)> {
+    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached rerank"))?;
+    let sel_ref = source
+        .stages
+        .iter()
+        .find(|s| s.stage == StageName::Rerank)
+        .and_then(|s| s.output_ref.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("source run has no Rerank output"))?;
+    let path = StatePath::new(format!("cache/rerank/{}.json", sel_ref))?;
+    let sel: Option<daily_paper_core::rerank::selection::ReadSelection> = store.read_json(&path)?;
+    let selection = sel.ok_or_else(|| anyhow::anyhow!("cached rerank not found: {}", sel_ref))?;
+    Ok((selection, Vec::new()))
+}
+
+fn load_cached_read_results(
+    store: &FileStateStore,
+    source: Option<&RunManifest>,
+) -> anyhow::Result<Vec<ReadResult>> {
+    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached read results"))?;
+    let read_ref = source
+        .stages
+        .iter()
+        .find(|s| s.stage == StageName::DeepRead)
+        .and_then(|s| s.output_ref.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("source run has no DeepRead output"))?;
+    // output_ref for DeepRead is a comma-separated list of paper IDs
+    let paper_ids: Vec<&str> = read_ref.split(',').collect();
+    let mut results = Vec::new();
+    for pid in paper_ids {
+        let path = StatePath::new(format!("cache/papers/{}/read/{}.json", pid, pid))?;
+        if let Some(r) = store.read_json::<ReadResult>(&path)? {
+            results.push(r);
+        }
+    }
+    Ok(results)
+}
+
+fn load_cached_render(
+    store: &FileStateStore,
+    source: Option<&RunManifest>,
+    run_id: &str,
+) -> anyhow::Result<(String, Option<String>)> {
+    let _ = source;
+    // Check if this run already has a report
+    let html_path = store
+        .root()
+        .join("reports")
+        .join(run_id)
+        .join("report.html");
+    if html_path.exists() {
+        let text_path = store.root().join("reports").join(run_id).join("report.txt");
+        Ok((
+            html_path.to_string_lossy().to_string(),
+            if text_path.exists() {
+                Some(text_path.to_string_lossy().to_string())
+            } else {
+                None
+            },
+        ))
+    } else {
+        anyhow::bail!("no cached report found for run {}", run_id)
     }
 }

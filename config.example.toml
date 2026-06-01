@@ -72,3 +72,7 @@ smtp_port = 465
 sender = "sender@example.com"
 receiver = "receiver@example.com"
 password_env = "SMTP_PASSWORD"
+
+[web]
+port = 8991
+# ui_path = ".daily-paper/ui"

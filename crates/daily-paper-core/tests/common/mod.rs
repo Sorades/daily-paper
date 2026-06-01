@@ -1,11 +1,11 @@
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path};
-use serde_json::json;
 use daily_paper_core::config::{
-    ResolvedConfig, ResolvedZoteroConfig, ResolvedSourceConfig,
-    ResolvedEmbeddingConfig, ResolvedRerankerConfig, ResolvedReaderConfig,
-    ResolvedPdfConfig, ResolvedEmailConfig,
+    ResolvedConfig, ResolvedEmailConfig, ResolvedEmbeddingConfig, ResolvedPdfConfig,
+    ResolvedReaderConfig, ResolvedRerankerConfig, ResolvedSourceConfig, ResolvedWebConfig,
+    ResolvedZoteroConfig,
 };
+use serde_json::json;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Start a mock HTTP server and return it.
 pub async fn start_mock_server() -> MockServer {
@@ -23,7 +23,7 @@ pub async fn setup_zotero_mock(server: &MockServer, user_id: &str) {
         .respond_with(
             ResponseTemplate::new(200)
                 .append_header("Last-Modified-Version", "42")
-                .set_body_string(items_json)
+                .set_body_string(items_json),
         )
         .mount(server)
         .await;
@@ -31,10 +31,7 @@ pub async fn setup_zotero_mock(server: &MockServer, user_id: &str) {
     // Mock collections fetch
     Mock::given(method("GET"))
         .and(path(format!("/users/{}/collections", user_id)))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(collections_json)
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(collections_json))
         .mount(server)
         .await;
 }
@@ -45,10 +42,7 @@ pub async fn setup_arxiv_mock(server: &MockServer) {
 
     Mock::given(method("GET"))
         .and(path("/api/query"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(feed_xml)
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(feed_xml))
         .mount(server)
         .await;
 }
@@ -56,35 +50,33 @@ pub async fn setup_arxiv_mock(server: &MockServer) {
 /// Set up OpenAI embedding API mock with deterministic vectors.
 #[allow(dead_code)]
 pub async fn setup_embedding_mock(server: &MockServer, dimensions: usize) {
-    let embedding: Vec<f32> = (0..dimensions).map(|i| (i as f32) / (dimensions as f32)).collect();
+    let embedding: Vec<f32> = (0..dimensions)
+        .map(|i| (i as f32) / (dimensions as f32))
+        .collect();
 
     Mock::given(method("POST"))
         .and(path("/v1/embeddings"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({
-                    "data": [
-                        {"embedding": embedding}
-                    ]
-                }))
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                {"embedding": embedding}
+            ]
+        })))
         .mount(server)
         .await;
 }
 
 /// Set up OpenAI embedding API mock that returns multiple embeddings.
 pub async fn setup_embedding_batch_mock(server: &MockServer, dimensions: usize, batch_size: usize) {
-    let embedding: Vec<f32> = (0..dimensions).map(|i| (i as f32) / (dimensions as f32)).collect();
+    let embedding: Vec<f32> = (0..dimensions)
+        .map(|i| (i as f32) / (dimensions as f32))
+        .collect();
     let data: Vec<serde_json::Value> = (0..batch_size)
         .map(|_| json!({"embedding": embedding}))
         .collect();
 
     Mock::given(method("POST"))
         .and(path("/v1/embeddings"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"data": data}))
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": data})))
         .mount(server)
         .await;
 }
@@ -93,23 +85,20 @@ pub async fn setup_embedding_batch_mock(server: &MockServer, dimensions: usize, 
 pub async fn setup_reader_mock(server: &MockServer, summary: &str) {
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({
-                    "choices": [
-                        {
-                            "message": {
-                                "content": summary
-                            }
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 1500,
-                        "completion_tokens": 200,
-                        "total_tokens": 1700
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": summary
                     }
-                }))
-        )
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1500,
+                "completion_tokens": 200,
+                "total_tokens": 1700
+            }
+        })))
         .mount(server)
         .await;
 }
@@ -124,7 +113,7 @@ pub async fn setup_pdf_mock(server: &MockServer) {
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_bytes(pdf_bytes.to_vec())
-                .insert_header("content-type", "application/pdf")
+                .insert_header("content-type", "application/pdf"),
         )
         .expect(1..)
         .mount(server)
@@ -186,6 +175,10 @@ pub fn make_test_config(mock_server_url: &str) -> ResolvedConfig {
             sender: "test@example.com".to_string(),
             receiver: "test@example.com".to_string(),
             password: "test".to_string(),
+        },
+        web: ResolvedWebConfig {
+            port: 8991,
+            ui_path: ".daily-paper/ui".to_string(),
         },
     }
 }

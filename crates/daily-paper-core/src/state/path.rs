@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
+use std::path::{Path, PathBuf};
 
 /// A validated, relative path within the state store.
 ///

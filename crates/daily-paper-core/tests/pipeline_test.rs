@@ -75,9 +75,7 @@ fn test_rerank_orders_by_score() {
     ];
 
     // Library has one item similar to paper_a
-    let library = vec![
-        ("lib1".to_string(), vec![0.9, 0.1, 0.0], 1.0),
-    ];
+    let library = vec![("lib1".to_string(), vec![0.9, 0.1, 0.0], 1.0)];
 
     let ranked = rerank(&candidates, &library, 10);
 
@@ -107,47 +105,43 @@ fn test_selection_takes_top_n() {
 /// Test that HTML rendering produces valid output.
 #[test]
 fn test_render_produces_html() {
-    use daily_paper_core::render::html::{render_html, ReportPaper};
     use daily_paper_core::models::common::Author;
     use daily_paper_core::models::read::ReadResult;
+    use daily_paper_core::render::html::{render_html, ReportPaper};
 
-    let papers = vec![
-        ReportPaper {
+    let papers = vec![ReportPaper {
+        paper_id: "paper_a".to_string(),
+        rank: 1,
+        title: "Test Paper".to_string(),
+        authors: vec![Author {
+            name: "Alice Smith".into(),
+            normalized_name: None,
+            affiliation: Some("MIT".into()),
+            url: None,
+        }],
+        abstract_text: "A test abstract.".to_string(),
+        landing_url: Some("https://arxiv.org/abs/2301.12345".to_string()),
+        pdf_url: None,
+        read_result: Some(ReadResult {
             paper_id: "paper_a".to_string(),
-            rank: 1,
-            title: "Test Paper".to_string(),
-            authors: vec![
-                Author {
-                    name: "Alice Smith".into(),
-                    normalized_name: None,
-                    affiliation: Some("MIT".into()),
-                    url: None,
-                },
-            ],
-            abstract_text: "A test abstract.".to_string(),
-            landing_url: Some("https://arxiv.org/abs/2301.12345".to_string()),
-            pdf_url: None,
-            read_result: Some(ReadResult {
-                paper_id: "paper_a".to_string(),
-                cache_key: "test".to_string(),
-                generated_at: chrono::Utc::now(),
-                model_id: "test-model".to_string(),
-                reader_template_hash: "test".to_string(),
-                language: "zh-CN".to_string(),
-                summary: "这是一篇测试论文的摘要。".to_string(),
-                metadata: daily_paper_core::models::read::PaperMetadataSummary {
-                    institutions: vec![],
-                    notable_authors: vec![],
-                    project_url: None,
-                    code_url: None,
-                },
-                author_affiliations: vec![],
-                token_usage: None,
-                warnings: vec![],
-            }),
-            score: 0.85,
-        },
-    ];
+            cache_key: "test".to_string(),
+            generated_at: chrono::Utc::now(),
+            model_id: "test-model".to_string(),
+            reader_template_hash: "test".to_string(),
+            language: "zh-CN".to_string(),
+            summary: "这是一篇测试论文的摘要。".to_string(),
+            metadata: daily_paper_core::models::read::PaperMetadataSummary {
+                institutions: vec![],
+                notable_authors: vec![],
+                project_url: None,
+                code_url: None,
+            },
+            author_affiliations: vec![],
+            token_usage: None,
+            warnings: vec![],
+        }),
+        score: 0.85,
+    }];
 
     let html = render_html("Test Report", &papers, "test-run-001");
 
@@ -161,30 +155,26 @@ fn test_render_produces_html() {
 /// Test that text rendering produces valid output.
 #[test]
 fn test_render_produces_text() {
-    use daily_paper_core::render::text::render_text;
-    use daily_paper_core::render::html::ReportPaper;
     use daily_paper_core::models::common::Author;
+    use daily_paper_core::render::html::ReportPaper;
+    use daily_paper_core::render::text::render_text;
 
-    let papers = vec![
-        ReportPaper {
-            paper_id: "paper_a".to_string(),
-            rank: 1,
-            title: "Test Paper".to_string(),
-            authors: vec![
-                Author {
-                    name: "Alice Smith".into(),
-                    normalized_name: None,
-                    affiliation: Some("MIT".into()),
-                    url: None,
-                },
-            ],
-            abstract_text: "A test abstract.".to_string(),
-            landing_url: None,
-            pdf_url: None,
-            read_result: None,
-            score: 0.5,
-        },
-    ];
+    let papers = vec![ReportPaper {
+        paper_id: "paper_a".to_string(),
+        rank: 1,
+        title: "Test Paper".to_string(),
+        authors: vec![Author {
+            name: "Alice Smith".into(),
+            normalized_name: None,
+            affiliation: Some("MIT".into()),
+            url: None,
+        }],
+        abstract_text: "A test abstract.".to_string(),
+        landing_url: None,
+        pdf_url: None,
+        read_result: None,
+        score: 0.5,
+    }];
 
     let text = render_text("Test Report", &papers, "test-run-001");
 
@@ -197,7 +187,7 @@ fn test_render_produces_text() {
 /// Test that dedup logic works correctly.
 #[test]
 fn test_dedup_removes_duplicates() {
-    use daily_paper_core::models::candidate::{CandidatePaper, PaperSourceKind, normalize_doi};
+    use daily_paper_core::models::candidate::{normalize_doi, CandidatePaper, PaperSourceKind};
     use daily_paper_core::models::zotero::ZoteroSnapshot;
 
     // Create candidates with a DOI that matches library

@@ -44,7 +44,11 @@ impl ZoteroClient {
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
                 let delay = Duration::from_secs(2u64.pow(attempt));
-                warn!(attempt, delay_secs = delay.as_secs(), "retrying Zotero request");
+                warn!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    "retrying Zotero request"
+                );
                 tokio::time::sleep(delay).await;
             }
 

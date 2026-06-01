@@ -37,17 +37,17 @@ pub fn compute_metadata_key(
 ///
 /// For MVP, we only extract what's already available in the arXiv API response.
 /// No PDF parsing, no institution detection, no code link scraping.
-pub fn extract_from_source(
-    paper_id: &str,
-    source_metadata: &serde_json::Value,
-) -> PaperMetadata {
+pub fn extract_from_source(paper_id: &str, source_metadata: &serde_json::Value) -> PaperMetadata {
     let mut institutions = Vec::new();
     let mut notable_authors = Vec::new();
     let mut homepage_urls = Vec::new();
     let warnings = Vec::new();
 
     // Extract affiliations from source metadata if present
-    if let Some(affiliations) = source_metadata.get("affiliations").and_then(|v| v.as_array()) {
+    if let Some(affiliations) = source_metadata
+        .get("affiliations")
+        .and_then(|v| v.as_array())
+    {
         for aff in affiliations {
             if let Some(s) = aff.as_str() {
                 institutions.push(s.to_string());

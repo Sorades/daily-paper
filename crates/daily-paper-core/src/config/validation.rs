@@ -1,5 +1,5 @@
-use crate::error::{Error, Result};
 use super::raw::RawConfig;
+use crate::error::{Error, Result};
 
 /// Validate required fields in the raw config.
 pub fn _validate(raw: &RawConfig) -> Result<()> {
@@ -14,10 +14,20 @@ pub fn _validate(raw: &RawConfig) -> Result<()> {
     }
     if raw.embedding.kind != "fastembed" {
         if raw.embedding.base_url.as_deref().unwrap_or("").is_empty() {
-            return Err(Error::Config("embedding.base_url is required for non-local embedding".into()));
+            return Err(Error::Config(
+                "embedding.base_url is required for non-local embedding".into(),
+            ));
         }
-        if raw.embedding.api_key_env.as_deref().unwrap_or("").is_empty() {
-            return Err(Error::Config("embedding.api_key_env is required for non-local embedding".into()));
+        if raw
+            .embedding
+            .api_key_env
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Err(Error::Config(
+                "embedding.api_key_env is required for non-local embedding".into(),
+            ));
         }
     }
     if raw.reader.base_url.is_empty() {

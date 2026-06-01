@@ -36,7 +36,11 @@ impl ArxivClient {
     }
 
     /// Fetch papers published in the given date window.
-    pub async fn fetch(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<CandidatePaper>> {
+    pub async fn fetch(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CandidatePaper>> {
         let mut all_papers = Vec::new();
 
         for category in &self.categories {
@@ -66,7 +70,8 @@ impl ArxivClient {
             let query = if self.include_cross_list {
                 format!("cat:{}", category)
             } else {
-                format!("cat:{} AND submittedDate:[{} TO {}]",
+                format!(
+                    "cat:{} AND submittedDate:[{} TO {}]",
                     category,
                     start.format("%Y%m%d%H%M"),
                     end.format("%Y%m%d%H%M")
@@ -112,7 +117,11 @@ impl ArxivClient {
         for attempt in 0..=max_retries {
             if attempt > 0 {
                 let delay = Duration::from_secs(5 * 2u64.pow(attempt));
-                warn!(attempt, delay_secs = delay.as_secs(), "retrying arXiv request");
+                warn!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    "retrying arXiv request"
+                );
                 tokio::time::sleep(delay).await;
             }
 
@@ -246,7 +255,8 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                         if !author_name.is_empty() {
                             let mut author_json = serde_json::json!({"name": author_name});
                             if !author_affiliation.is_empty() {
-                                author_json["affiliation"] = serde_json::Value::String(author_affiliation.clone());
+                                author_json["affiliation"] =
+                                    serde_json::Value::String(author_affiliation.clone());
                             }
                             authors.push(author_json);
                         }

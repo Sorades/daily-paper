@@ -10,6 +10,7 @@ pub struct ResolvedConfig {
     pub reader: ResolvedReaderConfig,
     pub pdf: ResolvedPdfConfig,
     pub email: ResolvedEmailConfig,
+    pub web: ResolvedWebConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +86,12 @@ pub struct ResolvedEmailConfig {
     pub password: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedWebConfig {
+    pub port: u16,
+    pub ui_path: String,
+}
+
 fn resolve_env(var_name: &str) -> Result<String> {
     std::env::var(var_name).map_err(|_| {
         crate::error::Error::Config(format!("environment variable '{}' not set", var_name))
@@ -123,9 +130,11 @@ impl ResolvedConfig {
             embedding: ResolvedEmbeddingConfig {
                 kind: raw.embedding.kind.clone(),
                 base_url: raw.embedding.base_url.clone(),
-                api_key: raw.embedding.api_key_env.as_deref().and_then(|env| {
-                    std::env::var(env).ok()
-                }),
+                api_key: raw
+                    .embedding
+                    .api_key_env
+                    .as_deref()
+                    .and_then(|env| std::env::var(env).ok()),
                 model: raw.embedding.model.clone().unwrap_or_else(|| {
                     if raw.embedding.kind == "fastembed" {
                         "BAAI/bge-small-en-v1.5".to_string()
@@ -148,9 +157,17 @@ impl ResolvedConfig {
                 api_key: resolve_env(&raw.reader.api_key_env)?,
                 model: raw.reader.model.clone(),
                 top_n: raw.reader.top_n.unwrap_or(10),
-                language: raw.reader.language.clone().unwrap_or_else(|| "zh-CN".into()),
+                language: raw
+                    .reader
+                    .language
+                    .clone()
+                    .unwrap_or_else(|| "zh-CN".into()),
                 require_full_text: raw.reader.require_full_text.unwrap_or(true),
-                on_read_failure: raw.reader.on_read_failure.clone().unwrap_or_else(|| "block".into()),
+                on_read_failure: raw
+                    .reader
+                    .on_read_failure
+                    .clone()
+                    .unwrap_or_else(|| "block".into()),
                 timeout_secs: raw.reader.timeout_secs.unwrap_or(120),
                 max_retries: raw.reader.max_retries.unwrap_or(5),
                 max_concurrency: raw.reader.max_concurrency.unwrap_or(2),
@@ -168,6 +185,14 @@ impl ResolvedConfig {
                 sender: raw.email.sender.clone(),
                 receiver: raw.email.receiver.clone(),
                 password: resolve_env(&raw.email.password_env)?,
+            },
+            web: ResolvedWebConfig {
+                port: raw.web.as_ref().and_then(|w| w.port).unwrap_or(8991),
+                ui_path: raw
+                    .web
+                    .as_ref()
+                    .and_then(|w| w.ui_path.clone())
+                    .unwrap_or_else(|| ".daily-paper/ui".to_string()),
             },
         })
     }

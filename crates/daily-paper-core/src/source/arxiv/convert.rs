@@ -31,16 +31,24 @@ pub fn arxmliv_entry_to_candidate(entry: &serde_json::Value) -> Option<Candidate
     let published_at = parse_datetime(entry, "published");
     let updated_at = parse_datetime(entry, "updated");
 
-    let landing_url = entry.get("link_alternate").and_then(|v| v.as_str()).map(String::from);
-    let pdf_url = entry.get("link_related").and_then(|v| v.as_str()).map(String::from);
-
-    // Extract DOI if present
-    let doi = entry
-        .get("doi")
+    let landing_url = entry
+        .get("link_alternate")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let pdf_url = entry
+        .get("link_related")
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    let paper_id = make_paper_id(doi.as_deref(), Some(&norm_arxiv_id), &PaperSourceKind::Arxiv, &arxiv_id);
+    // Extract DOI if present
+    let doi = entry.get("doi").and_then(|v| v.as_str()).map(String::from);
+
+    let paper_id = make_paper_id(
+        doi.as_deref(),
+        Some(&norm_arxiv_id),
+        &PaperSourceKind::Arxiv,
+        &arxiv_id,
+    );
 
     Some(CandidatePaper {
         paper_id,
@@ -77,7 +85,10 @@ fn extract_authors(entry: &serde_json::Value) -> Vec<Author> {
             arr.iter()
                 .filter_map(|a| {
                     let name = a.get("name")?.as_str()?;
-                    let affiliation = a.get("affiliation").and_then(|v| v.as_str()).map(String::from);
+                    let affiliation = a
+                        .get("affiliation")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     Some(Author {
                         name: name.to_string(),
                         normalized_name: None,
@@ -165,8 +176,14 @@ mod tests {
         });
 
         let paper = arxmliv_entry_to_candidate(&entry).unwrap();
-        assert_eq!(paper.landing_url, Some("http://arxiv.org/abs/2301.12345v1".into()));
-        assert_eq!(paper.pdf_url, Some("http://arxiv.org/pdf/2301.12345v1".into()));
+        assert_eq!(
+            paper.landing_url,
+            Some("http://arxiv.org/abs/2301.12345v1".into())
+        );
+        assert_eq!(
+            paper.pdf_url,
+            Some("http://arxiv.org/pdf/2301.12345v1".into())
+        );
     }
 
     #[test]
@@ -181,7 +198,10 @@ mod tests {
         });
 
         let paper = arxmliv_entry_to_candidate(&entry).unwrap();
-        assert_eq!(paper.landing_url, Some("http://arxiv.org/abs/2301.12345v1".into()));
+        assert_eq!(
+            paper.landing_url,
+            Some("http://arxiv.org/abs/2301.12345v1".into())
+        );
         assert_eq!(paper.pdf_url, None);
     }
 }

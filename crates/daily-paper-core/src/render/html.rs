@@ -45,7 +45,9 @@ fn format_summary_html(summary: &str) -> String {
     let mut html = String::new();
     for block in summary.split("\n\n") {
         let block = block.trim();
-        if block.is_empty() { continue; }
+        if block.is_empty() {
+            continue;
+        }
         if let Some(colon_pos) = block.find(": ") {
             let (label_part, rest) = block.split_at(colon_pos);
             let label = label_part.trim_matches('*').trim();
@@ -289,26 +291,37 @@ footer {{
         if let Some(llm_affs) = llm_affiliations {
             for aff in llm_affs {
                 if let Some(ref s) = aff.affiliation {
-                    if !s.is_empty() && !affs.contains(s) { affs.push(s.clone()); }
+                    if !s.is_empty() && !affs.contains(s) {
+                        affs.push(s.clone());
+                    }
                 }
             }
         }
         if affs.is_empty() {
             for a in &paper.authors {
                 if let Some(ref s) = a.affiliation {
-                    if !s.is_empty() && !affs.contains(s) { affs.push(s.clone()); }
+                    if !s.is_empty() && !affs.contains(s) {
+                        affs.push(s.clone());
+                    }
                 }
             }
         }
         let aff_html = if affs.is_empty() {
             String::new()
         } else {
-            format!(r#"<div class="affiliations">{}</div>"#, escape_html(&affs.join(" · ")))
+            format!(
+                r#"<div class="affiliations">{}</div>"#,
+                escape_html(&affs.join(" · "))
+            )
         };
 
         // Title (linked to arXiv if available)
         let title_html = if let Some(arxiv_id) = extract_arxiv_id(&paper.paper_id) {
-            format!(r#"<a href="https://arxiv.org/abs/{}">{}</a>"#, arxiv_id, escape_html(&paper.title))
+            format!(
+                r#"<a href="https://arxiv.org/abs/{}">{}</a>"#,
+                arxiv_id,
+                escape_html(&paper.title)
+            )
         } else if let Some(url) = &paper.landing_url {
             format!(r#"<a href="{url}">{}</a>"#, escape_html(&paper.title))
         } else {
@@ -316,9 +329,13 @@ footer {{
         };
 
         // Score chip
-        let score_cls = if paper.score >= 0.7 { "chip-score-high" }
-            else if paper.score >= 0.4 { "chip-score-mid" }
-            else { "chip-score-low" };
+        let score_cls = if paper.score >= 0.7 {
+            "chip-score-high"
+        } else if paper.score >= 0.4 {
+            "chip-score-mid"
+        } else {
+            "chip-score-low"
+        };
         let score_chip = format!(
             r#"<span class="chip chip-score {score_cls}">{}</span>"#,
             format_score(paper.score)
@@ -337,7 +354,9 @@ footer {{
             ));
         } else {
             if let Some(url) = &paper.landing_url {
-                chips.push(format!(r#"<a class="chip chip-arxiv" href="{url}">Paper</a>"#));
+                chips.push(format!(
+                    r#"<a class="chip chip-arxiv" href="{url}">Paper</a>"#
+                ));
             }
             if let Some(url) = &paper.pdf_url {
                 chips.push(format!(r#"<a class="chip chip-pdf" href="{url}">PDF</a>"#));
@@ -347,10 +366,14 @@ footer {{
         // Project / code links as chips
         if let Some(ref result) = paper.read_result {
             if let Some(ref url) = result.metadata.project_url {
-                chips.push(format!(r#"<a class="chip chip-proj" href="{url}">Project</a>"#));
+                chips.push(format!(
+                    r#"<a class="chip chip-proj" href="{url}">Project</a>"#
+                ));
             }
             if let Some(ref url) = result.metadata.code_url {
-                chips.push(format!(r#"<a class="chip chip-proj" href="{url}">Code</a>"#));
+                chips.push(format!(
+                    r#"<a class="chip chip-proj" href="{url}">Code</a>"#
+                ));
             }
         }
 
@@ -418,32 +441,30 @@ mod tests {
 
     #[test]
     fn render_basic_report() {
-        let papers = vec![
-            ReportPaper {
-                paper_id: "arxiv:2301.12345".into(),
-                rank: 1,
-                title: "Test Paper".into(),
-                authors: vec![
-                    Author {
-                        name: "Alice Smith".into(),
-                        normalized_name: None,
-                        affiliation: Some("MIT".into()),
-                        url: None,
-                    },
-                    Author {
-                        name: "Bob Jones".into(),
-                        normalized_name: None,
-                        affiliation: Some("Stanford".into()),
-                        url: None,
-                    },
-                ],
-                abstract_text: "An abstract.".into(),
-                landing_url: Some("https://arxiv.org/abs/2301.12345".into()),
-                pdf_url: None,
-                read_result: None,
-                score: 0.85,
-            },
-        ];
+        let papers = vec![ReportPaper {
+            paper_id: "arxiv:2301.12345".into(),
+            rank: 1,
+            title: "Test Paper".into(),
+            authors: vec![
+                Author {
+                    name: "Alice Smith".into(),
+                    normalized_name: None,
+                    affiliation: Some("MIT".into()),
+                    url: None,
+                },
+                Author {
+                    name: "Bob Jones".into(),
+                    normalized_name: None,
+                    affiliation: Some("Stanford".into()),
+                    url: None,
+                },
+            ],
+            abstract_text: "An abstract.".into(),
+            landing_url: Some("https://arxiv.org/abs/2301.12345".into()),
+            pdf_url: None,
+            read_result: None,
+            score: 0.85,
+        }];
 
         let html = render_html("Daily Papers", &papers, "test-run-1");
         assert!(html.contains("Test Paper"));

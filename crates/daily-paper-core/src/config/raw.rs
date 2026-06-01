@@ -10,6 +10,7 @@ pub struct RawConfig {
     pub reader: ReaderConfig,
     pub pdf: PdfConfig,
     pub email: EmailConfig,
+    pub web: Option<WebConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,4 +95,10 @@ pub struct EmailConfig {
     pub sender: String,
     pub receiver: String,
     pub password_env: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebConfig {
+    pub port: Option<u16>,
+    pub ui_path: Option<String>,
 }

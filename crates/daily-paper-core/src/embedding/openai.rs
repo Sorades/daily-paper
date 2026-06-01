@@ -69,9 +69,11 @@ impl EmbeddingClient {
         let mut all_embeddings = Vec::with_capacity(texts.len());
 
         for chunk in texts.chunks(self.batch_size) {
-            let _permit = self.semaphore.acquire().await.map_err(|e| {
-                Error::Embedding(format!("semaphore closed: {}", e))
-            })?;
+            let _permit = self
+                .semaphore
+                .acquire()
+                .await
+                .map_err(|e| Error::Embedding(format!("semaphore closed: {}", e)))?;
 
             let embeddings = self.call_with_retry(chunk).await?;
             all_embeddings.extend(embeddings);
@@ -82,14 +84,17 @@ impl EmbeddingClient {
 
     /// Embed a single text.
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
-        let _permit = self.semaphore.acquire().await.map_err(|e| {
-            Error::Embedding(format!("semaphore closed: {}", e))
-        })?;
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| Error::Embedding(format!("semaphore closed: {}", e)))?;
 
         let result = self.call_with_retry(&[text.to_string()]).await?;
-        result.into_iter().next().ok_or_else(|| {
-            Error::Embedding("empty response from embedding API".into())
-        })
+        result
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Embedding("empty response from embedding API".into()))
     }
 
     async fn call_with_retry(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -98,7 +103,11 @@ impl EmbeddingClient {
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
                 let delay = Duration::from_secs(2u64.pow(attempt));
-                warn!(attempt, delay_secs = delay.as_secs(), "retrying embedding request");
+                warn!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    "retrying embedding request"
+                );
                 tokio::time::sleep(delay).await;
             }
 
@@ -146,13 +155,18 @@ impl EmbeddingClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(30);
-            return Err(Error::RateLimited { retry_after_secs: retry_after });
+            return Err(Error::RateLimited {
+                retry_after_secs: retry_after,
+            });
         }
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Embedding(format!("API returned {}: {}", status, body)));
+            return Err(Error::Embedding(format!(
+                "API returned {}: {}",
+                status, body
+            )));
         }
 
         let resp_body: serde_json::Value = resp.json().await?;
@@ -174,14 +188,15 @@ impl EmbeddingClient {
             embeddings.push(vector);
         }
 
-        debug!(count = embeddings.len(), dim = embeddings.first().map(|v| v.len()).unwrap_or(0), "got embeddings");
+        debug!(
+            count = embeddings.len(),
+            dim = embeddings.first().map(|v| v.len()).unwrap_or(0),
+            "got embeddings"
+        );
         Ok(embeddings)
     }
 }
 
 fn is_retryable(err: &Error) -> bool {
-    matches!(
-        err,
-        Error::RetryableNetwork(_) | Error::RateLimited { .. }
-    )
+    matches!(err, Error::RetryableNetwork(_) | Error::RateLimited { .. })
 }

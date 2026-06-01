@@ -3,10 +3,12 @@ mod raw;
 mod resolved;
 mod validation;
 
-pub use loader::{load_config, default_config_path, default_state_dir, is_project_mode, init_project_dir};
+pub use loader::{
+    default_config_path, default_state_dir, init_project_dir, is_project_mode, load_config,
+};
 pub use raw::{RawConfig, StateConfig};
 pub use resolved::{
-    ResolvedConfig, ResolvedZoteroConfig, ResolvedZoteroFilter,
-    ResolvedSourceConfig, ResolvedEmbeddingConfig, ResolvedRerankerConfig,
-    ResolvedReaderConfig, ResolvedPdfConfig, ResolvedEmailConfig,
+    ResolvedConfig, ResolvedEmailConfig, ResolvedEmbeddingConfig, ResolvedPdfConfig,
+    ResolvedReaderConfig, ResolvedRerankerConfig, ResolvedSourceConfig, ResolvedWebConfig,
+    ResolvedZoteroConfig, ResolvedZoteroFilter,
 };

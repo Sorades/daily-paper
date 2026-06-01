@@ -134,8 +134,11 @@ pub fn parse_llm_output(json_str: &str) -> Option<ParsedLlmOutput> {
             .iter()
             .filter_map(|(label, val)| {
                 let s = val.and_then(|v| v.as_str())?.trim();
-                if s.is_empty() || s == "null" { None }
-                else { Some(format!("**{}**: {}", label, s)) }
+                if s.is_empty() || s == "null" {
+                    None
+                } else {
+                    Some(format!("**{}**: {}", label, s))
+                }
             })
             .collect();
             parts.join("\n\n")
@@ -282,7 +285,10 @@ mod tests {
         assert_eq!(result.summary, "This paper proposes a new method.");
         assert_eq!(result.author_affiliations.len(), 2);
         assert_eq!(result.author_affiliations[0].name, "Alice Smith");
-        assert_eq!(result.author_affiliations[0].affiliation, Some("MIT".into()));
+        assert_eq!(
+            result.author_affiliations[0].affiliation,
+            Some("MIT".into())
+        );
         assert_eq!(result.project_url, Some("https://example.com".into()));
         assert_eq!(result.code_url, None);
     }

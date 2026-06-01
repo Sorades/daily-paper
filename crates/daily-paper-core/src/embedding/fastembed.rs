@@ -30,8 +30,7 @@ impl LocalEmbeddingClient {
             }
         };
 
-        let mut options = InitOptions::new(embedding_model)
-            .with_show_download_progress(true);
+        let mut options = InitOptions::new(embedding_model).with_show_download_progress(true);
 
         // Set custom cache directory if provided
         if let Some(dir) = cache_dir {
@@ -86,8 +85,9 @@ impl LocalEmbeddingClient {
     /// Embed a single text.
     pub fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         let result = self.embed_batch(&[text.to_string()])?;
-        result.into_iter().next().ok_or_else(|| {
-            Error::Embedding("empty result from local embedding".into())
-        })
+        result
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Embedding("empty result from local embedding".into()))
     }
 }

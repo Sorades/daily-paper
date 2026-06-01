@@ -75,7 +75,7 @@ pub struct MatchedLibraryItem {
 
 /// Rerank candidate papers against the library.
 pub fn rerank(
-    candidates: &[(String, Vec<f32>)], // (paper_id, embedding)
+    candidates: &[(String, Vec<f32>)],         // (paper_id, embedding)
     library_items: &[(String, Vec<f32>, f32)], // (library_id, embedding, weight)
     top_k: usize,
 ) -> Vec<RankedPaper> {
@@ -99,7 +99,11 @@ pub fn rerank(
                 })
                 .collect();
 
-            matches.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+            matches.sort_by(|a, b| {
+                b.similarity
+                    .partial_cmp(&a.similarity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             matches.truncate(top_k);
 
             RankedPaper {
@@ -112,7 +116,11 @@ pub fn rerank(
         .collect();
 
     // Sort by score descending and assign ranks
-    ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     for (i, paper) in ranked.iter_mut().enumerate() {
         paper.rank = i + 1;
     }
@@ -158,8 +166,8 @@ mod tests {
     #[test]
     fn weighted_top_k_basic() {
         let library = vec![
-            (vec![1.0, 0.0], 1.0),  // identical
-            (vec![0.0, 1.0], 2.0),  // orthogonal
+            (vec![1.0, 0.0], 1.0), // identical
+            (vec![0.0, 1.0], 2.0), // orthogonal
         ];
         let candidate = vec![1.0, 0.0];
         let score = weighted_top_k_score(&candidate, &library, 2);
@@ -171,9 +179,9 @@ mod tests {
     #[test]
     fn weighted_top_k_respects_k() {
         let library = vec![
-            (vec![1.0, 0.0], 1.0),  // sim=1.0
-            (vec![0.7, 0.7], 1.0),  // sim≈0.707
-            (vec![0.0, 1.0], 1.0),  // sim=0.0
+            (vec![1.0, 0.0], 1.0), // sim=1.0
+            (vec![0.7, 0.7], 1.0), // sim≈0.707
+            (vec![0.0, 1.0], 1.0), // sim=0.0
         ];
         let candidate = vec![1.0, 0.0];
 
@@ -190,13 +198,8 @@ mod tests {
 
     #[test]
     fn rerank_basic() {
-        let candidates = vec![
-            ("p1".into(), vec![1.0, 0.0]),
-            ("p2".into(), vec![0.0, 1.0]),
-        ];
-        let library = vec![
-            ("lib1".into(), vec![1.0, 0.0], 1.0),
-        ];
+        let candidates = vec![("p1".into(), vec![1.0, 0.0]), ("p2".into(), vec![0.0, 1.0])];
+        let library = vec![("lib1".into(), vec![1.0, 0.0], 1.0)];
 
         let ranked = rerank(&candidates, &library, 1);
         assert_eq!(ranked[0].paper_id, "p1");
@@ -211,9 +214,7 @@ mod tests {
             ("high".into(), vec![1.0, 0.0]),
             ("mid".into(), vec![0.7, 0.7]),
         ];
-        let library = vec![
-            ("lib1".into(), vec![1.0, 0.0], 1.0),
-        ];
+        let library = vec![("lib1".into(), vec![1.0, 0.0], 1.0)];
 
         let ranked = rerank(&candidates, &library, 1);
         assert_eq!(ranked[0].paper_id, "high");

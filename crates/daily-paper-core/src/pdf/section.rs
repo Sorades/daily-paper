@@ -1,5 +1,5 @@
-use regex::Regex;
 use crate::models::pdf::PaperSection;
+use regex::Regex;
 
 /// Section header patterns commonly found in academic papers.
 const SECTION_PATTERNS: &[&str] = &[
@@ -19,8 +19,7 @@ const SECTION_PATTERNS: &[&str] = &[
 fn normalize_title(title: &str) -> String {
     let lower = title.trim().to_lowercase();
     // Strip leading number
-    let stripped = lower
-        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ');
+    let stripped = lower.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ');
     stripped.trim().to_string()
 }
 
@@ -177,7 +176,10 @@ mod tests {
         let sections = parse_sections(text);
         assert!(sections.len() >= 3);
 
-        let titles: Vec<&str> = sections.iter().map(|s| s.normalized_title.as_str()).collect();
+        let titles: Vec<&str> = sections
+            .iter()
+            .map(|s| s.normalized_title.as_str())
+            .collect();
         assert!(titles.contains(&"introduction"));
         assert!(titles.contains(&"methods"));
         assert!(titles.contains(&"results"));
@@ -196,7 +198,11 @@ mod tests {
 
     #[test]
     fn select_sections_respects_budget() {
-        let text = "a".repeat(1000) + "\n\n1 Introduction\n" + &"b".repeat(500) + "\n\n2 Methods\n" + &"c".repeat(500);
+        let text = "a".repeat(1000)
+            + "\n\n1 Introduction\n"
+            + &"b".repeat(500)
+            + "\n\n2 Methods\n"
+            + &"c".repeat(500);
         let sections = parse_sections(&text);
         let selected = select_sections_for_reading(&text, &sections, 600);
         assert!(selected.len() <= 600);

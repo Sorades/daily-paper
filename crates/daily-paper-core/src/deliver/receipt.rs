@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::models::report::{DeliveryReceipt, compute_delivery_key};
+use crate::models::report::{compute_delivery_key, DeliveryReceipt};
 
 use super::smtp::send_email;
 

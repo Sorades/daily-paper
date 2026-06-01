@@ -6,15 +6,27 @@ use crate::models::zotero::LibraryPaper;
 ///
 /// Each collection has a key and a parentCollection. This function builds
 /// slash-separated paths like "2026/survey/agent".
-pub fn build_collection_paths(collections: &[serde_json::Value]) -> std::collections::HashMap<String, String> {
+pub fn build_collection_paths(
+    collections: &[serde_json::Value],
+) -> std::collections::HashMap<String, String> {
     let mut name_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut parent_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut parent_map: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for col in collections {
-        let Some(data) = col.get("data") else { continue };
-        let Some(key) = data.get("key").and_then(|v| v.as_str()) else { continue };
-        let Some(name) = data.get("name").and_then(|v| v.as_str()) else { continue };
-        let parent = data.get("parentCollection").and_then(|v| v.as_str()).unwrap_or("");
+        let Some(data) = col.get("data") else {
+            continue;
+        };
+        let Some(key) = data.get("key").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(name) = data.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let parent = data
+            .get("parentCollection")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
         name_map.insert(key.to_string(), name.to_string());
         parent_map.insert(key.to_string(), parent.to_string());
@@ -23,7 +35,12 @@ pub fn build_collection_paths(collections: &[serde_json::Value]) -> std::collect
     let mut paths: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     for key in name_map.keys() {
-        let path = resolve_path(key, &name_map, &parent_map, &mut std::collections::HashSet::new());
+        let path = resolve_path(
+            key,
+            &name_map,
+            &parent_map,
+            &mut std::collections::HashSet::new(),
+        );
         paths.insert(key.clone(), path);
     }
 
@@ -56,7 +73,11 @@ fn resolve_path(
 }
 
 /// Compute a snapshot ID from the library state.
-pub fn compute_snapshot_id(user_id: &str, library_version: Option<u64>, items: &[LibraryPaper]) -> String {
+pub fn compute_snapshot_id(
+    user_id: &str,
+    library_version: Option<u64>,
+    items: &[LibraryPaper],
+) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(user_id.as_bytes());
     if let Some(v) = library_version {

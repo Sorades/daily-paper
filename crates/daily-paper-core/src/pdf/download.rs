@@ -28,9 +28,10 @@ pub async fn download_pdf(
         return Err(Error::PdfDownload(format!("HTTP {}", status)));
     }
 
-    let bytes = resp.bytes().await.map_err(|e| {
-        Error::PdfDownload(format!("failed to read response: {}", e))
-    })?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| Error::PdfDownload(format!("failed to read response: {}", e)))?;
 
     let byte_len = bytes.len() as u64;
     let max_bytes = max_mb * 1024 * 1024;

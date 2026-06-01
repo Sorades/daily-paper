@@ -18,12 +18,14 @@ pub fn send_email(
     message_id: &str,
 ) -> Result<String> {
     let email = Message::builder()
-        .from(sender.parse().map_err(|e| {
-            Error::Delivery(format!("invalid sender '{}': {}", sender, e))
-        })?)
-        .to(receiver.parse().map_err(|e| {
-            Error::Delivery(format!("invalid receiver '{}': {}", receiver, e))
-        })?)
+        .from(
+            sender
+                .parse()
+                .map_err(|e| Error::Delivery(format!("invalid sender '{}': {}", sender, e)))?,
+        )
+        .to(receiver
+            .parse()
+            .map_err(|e| Error::Delivery(format!("invalid receiver '{}': {}", receiver, e)))?)
         .subject(subject)
         .header(ContentType::TEXT_HTML)
         .message_id(Some(message_id.to_string()))
@@ -50,9 +52,9 @@ pub fn send_email(
         .credentials(creds)
         .build();
 
-    let response = transport.send(&email).map_err(|e| {
-        Error::Delivery(format!("SMTP send failed: {}", e))
-    })?;
+    let response = transport
+        .send(&email)
+        .map_err(|e| Error::Delivery(format!("SMTP send failed: {}", e)))?;
 
     Ok(format!("{:?}", response))
 }

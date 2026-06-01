@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
-use crate::error::Result;
+use super::atomic::{atomic_write, atomic_write_json};
 use super::lock::RunLock;
 use super::path::StatePath;
-use super::atomic::{atomic_write, atomic_write_json};
+use crate::error::Result;
+use std::path::{Path, PathBuf};
 
 /// File-system based state store.
 ///
@@ -24,7 +24,17 @@ impl FileStateStore {
 
     /// Ensure the root and standard subdirectories exist.
     pub fn ensure_dirs(&self) -> Result<()> {
-        for subdir in &["runs", "cache/arxiv", "cache/zotero/snapshots", "cache/embeddings", "cache/models", "cache/rerank", "cache/papers", "reports", "deliveries/history"] {
+        for subdir in &[
+            "runs",
+            "cache/arxiv",
+            "cache/zotero/snapshots",
+            "cache/embeddings",
+            "cache/models",
+            "cache/rerank",
+            "cache/papers",
+            "reports",
+            "deliveries/history",
+        ] {
             let dir = self.root.join(subdir);
             std::fs::create_dir_all(&dir)?;
         }
