@@ -13,6 +13,7 @@ pub async fn start_mock_server() -> MockServer {
 }
 
 /// Set up Zotero API mocks for items and collections.
+#[allow(dead_code)]
 pub async fn setup_zotero_mock(server: &MockServer, user_id: &str) {
     let items_json = include_str!("../fixtures/zotero_items.json");
     let collections_json = include_str!("../fixtures/zotero_collections.json");
@@ -37,11 +38,12 @@ pub async fn setup_zotero_mock(server: &MockServer, user_id: &str) {
 }
 
 /// Set up arXiv API mock.
+#[allow(dead_code)]
 pub async fn setup_arxiv_mock(server: &MockServer) {
-    let feed_xml = include_str!("../fixtures/arxiv_feed.xml");
+    let feed_xml = include_str!("../fixtures/arxiv_rss.xml");
 
     Mock::given(method("GET"))
-        .and(path("/api/query"))
+        .and(path("/rss/cs.AI"))
         .respond_with(ResponseTemplate::new(200).set_body_string(feed_xml))
         .mount(server)
         .await;
@@ -66,6 +68,7 @@ pub async fn setup_embedding_mock(server: &MockServer, dimensions: usize) {
 }
 
 /// Set up OpenAI embedding API mock that returns multiple embeddings.
+#[allow(dead_code)]
 pub async fn setup_embedding_batch_mock(server: &MockServer, dimensions: usize, batch_size: usize) {
     let embedding: Vec<f32> = (0..dimensions)
         .map(|i| (i as f32) / (dimensions as f32))

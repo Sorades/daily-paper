@@ -87,6 +87,9 @@ daily-paper run --state-dir ./.daily-paper
       <run-id>.json
       <run-id>.config.json
       latest
+    dates/
+      <date>/
+        report.json                  # ReportIndex，指向 reports/<run-id>/report.*
     zotero/
       sync-state.json
       snapshots/

@@ -1,8 +1,5 @@
 mod common;
 
-use std::path::Path;
-use tempfile::TempDir;
-
 /// Test that the embedding client produces correct output.
 #[tokio::test]
 async fn test_embedding_produces_vectors() {
@@ -187,44 +184,8 @@ fn test_render_produces_text() {
 /// Test that dedup logic works correctly.
 #[test]
 fn test_dedup_removes_duplicates() {
-    use daily_paper_core::models::candidate::{normalize_doi, CandidatePaper, PaperSourceKind};
+    use daily_paper_core::models::candidate::normalize_doi;
     use daily_paper_core::models::zotero::ZoteroSnapshot;
-
-    // Create candidates with a DOI that matches library
-    let candidates = vec![
-        CandidatePaper {
-            paper_id: "c1".to_string(),
-            source: PaperSourceKind::Arxiv,
-            source_id: "2301.12345".to_string(),
-            title: "Paper in Library".to_string(),
-            abstract_text: "Abstract".to_string(),
-            authors: vec![],
-            published_at: None,
-            updated_at: None,
-            categories: vec![],
-            doi: Some("10.1234/test".to_string()),
-            arxiv_id: None,
-            landing_url: None,
-            pdf_url: None,
-            source_metadata: serde_json::Value::Null,
-        },
-        CandidatePaper {
-            paper_id: "c2".to_string(),
-            source: PaperSourceKind::Arxiv,
-            source_id: "2301.67890".to_string(),
-            title: "New Paper".to_string(),
-            abstract_text: "Abstract".to_string(),
-            authors: vec![],
-            published_at: None,
-            updated_at: None,
-            categories: vec![],
-            doi: Some("10.5678/new".to_string()),
-            arxiv_id: None,
-            landing_url: None,
-            pdf_url: None,
-            source_metadata: serde_json::Value::Null,
-        },
-    ];
 
     // Library has paper with same DOI
     let snapshot = ZoteroSnapshot {

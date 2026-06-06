@@ -277,7 +277,7 @@ daily-paper run --config daily-paper.toml --state-dir ./.daily-paper
 
 - 未传 `--config` 时读取平台默认配置文件。
 - 未传 `--state-dir` 且配置没有 `[state].dir` 时使用平台 app data 目录。
-- 未传 `--date` 时抓取运行日之前的自然日，按本地时区计算日期窗口，再转换为 UTC 存储。
+- 未传 `--date` 时抓取运行日当天的自然日，按本地时区计算日期窗口，再转换为 UTC 存储。
 - 优先级为 CLI 参数 > 配置文件 > 内置默认值。
 
 ### status

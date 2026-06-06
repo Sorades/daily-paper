@@ -29,6 +29,7 @@ exclude = true
 
 [[sources]]
 kind = "arxiv"
+# arXiv uses the category RSS feed by default: https://rss.arxiv.org/rss/<category>
 categories = ["cs.AI", "cs.CL", "cs.LG"]
 include_cross_list = false
 

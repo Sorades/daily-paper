@@ -95,7 +95,7 @@ fn extract_year(date_str: &str) -> Option<i32> {
     for part in date_str.split(|c: char| !c.is_ascii_digit()) {
         if part.len() == 4 {
             if let Ok(year) = part.parse::<i32>() {
-                if 1900 <= year && year <= 2100 {
+                if (1900..=2100).contains(&year) {
                     return Some(year);
                 }
             }

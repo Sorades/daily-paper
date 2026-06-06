@@ -5,50 +5,53 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 
 /// Send an email via SMTP.
-pub fn send_email(
-    smtp_server: &str,
-    smtp_port: u16,
-    username: &str,
-    password: &str,
-    sender: &str,
-    receiver: &str,
-    subject: &str,
-    html_body: &str,
-    text_body: &str,
-    message_id: &str,
-) -> Result<String> {
+pub struct SmtpEmail<'a> {
+    pub smtp_server: &'a str,
+    pub smtp_port: u16,
+    pub username: &'a str,
+    pub password: &'a str,
+    pub sender: &'a str,
+    pub receiver: &'a str,
+    pub subject: &'a str,
+    pub html_body: &'a str,
+    pub text_body: &'a str,
+    pub message_id: &'a str,
+}
+
+pub fn send_email(req: &SmtpEmail<'_>) -> Result<String> {
     let email = Message::builder()
         .from(
-            sender
+            req.sender
                 .parse()
-                .map_err(|e| Error::Delivery(format!("invalid sender '{}': {}", sender, e)))?,
+                .map_err(|e| Error::Delivery(format!("invalid sender '{}': {}", req.sender, e)))?,
         )
-        .to(receiver
+        .to(req
+            .receiver
             .parse()
-            .map_err(|e| Error::Delivery(format!("invalid receiver '{}': {}", receiver, e)))?)
-        .subject(subject)
+            .map_err(|e| Error::Delivery(format!("invalid receiver '{}': {}", req.receiver, e)))?)
+        .subject(req.subject)
         .header(ContentType::TEXT_HTML)
-        .message_id(Some(message_id.to_string()))
+        .message_id(Some(req.message_id.to_string()))
         .multipart(
             lettre::message::MultiPart::alternative()
                 .singlepart(
                     lettre::message::SinglePart::builder()
                         .header(ContentType::TEXT_PLAIN)
-                        .body(text_body.to_string()),
+                        .body(req.text_body.to_string()),
                 )
                 .singlepart(
                     lettre::message::SinglePart::builder()
                         .header(ContentType::TEXT_HTML)
-                        .body(html_body.to_string()),
+                        .body(req.html_body.to_string()),
                 ),
         )
         .map_err(|e| Error::Delivery(format!("failed to build email: {}", e)))?;
 
-    let creds = Credentials::new(username.to_string(), password.to_string());
+    let creds = Credentials::new(req.username.to_string(), req.password.to_string());
 
-    let transport = SmtpTransport::relay(smtp_server)
+    let transport = SmtpTransport::relay(req.smtp_server)
         .map_err(|e| Error::Delivery(format!("SMTP relay error: {}", e)))?
-        .port(smtp_port)
+        .port(req.smtp_port)
         .credentials(creds)
         .build();
 

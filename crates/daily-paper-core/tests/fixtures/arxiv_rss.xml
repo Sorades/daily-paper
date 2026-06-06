@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>cs.AI updates on arXiv.org</title>
+    <item>
+      <title>Attention Is All You Need Again</title>
+      <link>https://arxiv.org/abs/2301.12345</link>
+      <description>arXiv:2301.12345v1 Announce Type: new
+Abstract: A test abstract about attention.</description>
+      <guid isPermaLink="false">oai:arXiv.org:2301.12345v1</guid>
+      <category>cs.AI</category>
+      <category>cs.LG</category>
+      <pubDate>Mon, 30 Jan 2023 00:00:00 -0000</pubDate>
+      <arxiv:announce_type>new</arxiv:announce_type>
+      <dc:creator>Alice Smith, Bob Jones</dc:creator>
+    </item>
+    <item>
+      <title>Efficient Learning Systems</title>
+      <link>https://arxiv.org/abs/2301.67890</link>
+      <description>arXiv:2301.67890v2 Announce Type: new
+Abstract: A test abstract about efficient learning.</description>
+      <guid isPermaLink="false">oai:arXiv.org:2301.67890v2</guid>
+      <category>cs.AI</category>
+      <pubDate>Mon, 30 Jan 2023 12:00:00 -0000</pubDate>
+      <arxiv:announce_type>new</arxiv:announce_type>
+      <dc:creator>Carol Chen</dc:creator>
+    </item>
+    <item>
+      <title>Updated Paper Should Be Ignored</title>
+      <link>https://arxiv.org/abs/2301.99999</link>
+      <description>arXiv:2301.99999v2 Announce Type: replace
+Abstract: This replacement should not be a daily candidate.</description>
+      <guid isPermaLink="false">oai:arXiv.org:2301.99999v2</guid>
+      <category>cs.AI</category>
+      <pubDate>Mon, 30 Jan 2023 13:00:00 -0000</pubDate>
+      <arxiv:announce_type>replace</arxiv:announce_type>
+      <dc:creator>Dana Doe</dc:creator>
+    </item>
+    <item>
+      <title>Old Paper Should Be Ignored</title>
+      <link>https://arxiv.org/abs/2301.00001</link>
+      <description>arXiv:2301.00001v1 Announce Type: new
+Abstract: This paper is outside the requested date window.</description>
+      <guid isPermaLink="false">oai:arXiv.org:2301.00001v1</guid>
+      <category>cs.AI</category>
+      <pubDate>Sun, 29 Jan 2023 23:59:00 -0000</pubDate>
+      <arxiv:announce_type>new</arxiv:announce_type>
+      <dc:creator>Eve Evans</dc:creator>
+    </item>
+  </channel>
+</rss>

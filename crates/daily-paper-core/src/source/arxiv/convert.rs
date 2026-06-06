@@ -50,6 +50,10 @@ pub fn arxmliv_entry_to_candidate(entry: &serde_json::Value) -> Option<Candidate
         &arxiv_id,
     );
 
+    let source_metadata = serde_json::json!({
+        "announce_type": entry.get("announce_type").and_then(|v| v.as_str()),
+    });
+
     Some(CandidatePaper {
         paper_id,
         source: PaperSourceKind::Arxiv,
@@ -64,7 +68,7 @@ pub fn arxmliv_entry_to_candidate(entry: &serde_json::Value) -> Option<Candidate
         arxiv_id: Some(norm_arxiv_id),
         landing_url,
         pdf_url,
-        source_metadata: serde_json::json!({}),
+        source_metadata,
     })
 }
 

@@ -84,7 +84,7 @@ async fn test_arxiv_fetch_papers() {
 
     let client =
         daily_paper_core::source::arxiv::client::ArxivClient::new(vec!["cs.AI".to_string()], false)
-            .with_base_url(&format!("{}/api/query", server.uri()));
+            .with_base_url(&format!("{}/rss", server.uri()));
 
     let start = chrono::NaiveDate::from_ymd_opt(2023, 1, 30)
         .unwrap()
@@ -103,6 +103,9 @@ async fn test_arxiv_fetch_papers() {
     let titles: Vec<&str> = papers.iter().map(|p| p.title.as_str()).collect();
     assert!(titles.iter().any(|t| t.contains("Attention")));
     assert!(titles.iter().any(|t| t.contains("Efficient")));
+    assert!(papers
+        .iter()
+        .all(|p| p.source_metadata["announce_type"] == "new"));
 }
 
 /// Test embedding client works correctly.

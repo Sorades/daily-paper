@@ -16,7 +16,7 @@ use daily_paper_core::models::common::{sha256_hex, DateWindow};
 use daily_paper_core::models::dedup::{DedupResult, DuplicateReason, ExistingLibraryMatch};
 use daily_paper_core::models::interest::{InterestPaperRef, InterestProfile};
 use daily_paper_core::models::read::{compute_read_cache_key, PaperMetadataSummary, ReadResult};
-use daily_paper_core::models::report::{compute_delivery_key, RenderedReport};
+use daily_paper_core::models::report::{compute_delivery_key, RenderedReport, ReportIndex};
 use daily_paper_core::models::run::*;
 use daily_paper_core::models::zotero::ZoteroSnapshot;
 use daily_paper_core::pdf::download::download_pdf;
@@ -296,7 +296,6 @@ pub async fn run_pipeline(
             store,
             config,
             manifest,
-            &dedup.candidates,
             &candidate_embs,
             &library_embs,
             &snapshot,
@@ -357,11 +356,13 @@ pub async fn run_pipeline(
             store,
             manifest,
             run_id,
-            &selection.selected_paper_ids,
-            &dedup.candidates,
-            &read_results,
-            &rerank_scores,
-            date,
+            RenderInput {
+                selected_ids: &selection.selected_paper_ids,
+                candidates: &dedup.candidates,
+                read_results: &read_results,
+                scores: &rerank_scores,
+                date,
+            },
         )
         .await;
         emit_stage_end(event_tx, manifest, run_id, StageName::Render, &r);
@@ -587,6 +588,7 @@ async fn stage_source_fetch(
     let cache_key = {
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
+        hasher.update(b"arxiv:rss:v1");
         hasher.update(date_window.label.as_bytes());
         for source in &config.sources {
             hasher.update(source.kind.as_bytes());
@@ -1047,7 +1049,6 @@ async fn stage_rerank(
     store: &FileStateStore,
     config: &ResolvedConfig,
     manifest: &mut RunManifest,
-    _candidates: &[CandidatePaper],
     candidate_embs: &[(String, Vec<f32>)],
     library_embs: &[(String, Vec<f32>, f32)],
     snapshot: &ZoteroSnapshot,
@@ -1396,15 +1397,19 @@ async fn stage_deep_read(
     Ok(read_results)
 }
 
+struct RenderInput<'a> {
+    selected_ids: &'a [String],
+    candidates: &'a [CandidatePaper],
+    read_results: &'a [ReadResult],
+    scores: &'a [(String, f32)],
+    date: &'a str,
+}
+
 async fn stage_render(
     store: &FileStateStore,
     manifest: &mut RunManifest,
     run_id: &str,
-    selected_ids: &[String],
-    candidates: &[CandidatePaper],
-    read_results: &[ReadResult],
-    scores: &[(String, f32)],
-    date: &str,
+    input: RenderInput<'_>,
 ) -> anyhow::Result<(String, Option<String>)> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -1418,12 +1423,14 @@ async fn stage_render(
         error: None,
     };
 
-    let report_papers: Vec<ReportPaper> = selected_ids
+    let report_papers: Vec<ReportPaper> = input
+        .selected_ids
         .iter()
         .enumerate()
         .filter_map(|(i, paper_id)| {
-            let candidate = candidates.iter().find(|c| &c.paper_id == paper_id)?;
-            let read_result = read_results
+            let candidate = input.candidates.iter().find(|c| &c.paper_id == paper_id)?;
+            let read_result = input
+                .read_results
                 .iter()
                 .find(|r| &r.paper_id == paper_id)
                 .cloned();
@@ -1437,7 +1444,8 @@ async fn stage_render(
                 landing_url: candidate.landing_url.clone(),
                 pdf_url: candidate.pdf_url.clone(),
                 read_result,
-                score: scores
+                score: input
+                    .scores
                     .iter()
                     .find(|(id, _)| id == paper_id)
                     .map(|(_, s)| *s)
@@ -1457,29 +1465,44 @@ async fn stage_render(
     store.write_string(&StatePath::new(&html_path)?, &html_body)?;
     store.write_string(&StatePath::new(&text_path)?, &text_body)?;
 
-    // Write report to date directory
-    let html_date_path = format!("dates/{}/report/report.html", date);
-    let text_date_path = format!("dates/{}/report/report.txt", date);
-    store.write_string(&StatePath::new(&html_date_path)?, &html_body)?;
-    store.write_string(&StatePath::new(&text_date_path)?, &text_body)?;
-
     let report_hash = sha256_hex(html_body.as_bytes());
     let report_instance_id = format!("{}-{}", run_id, &report_hash[..8]);
+    let generated_at = Utc::now();
 
     let rendered = RenderedReport {
         report_hash: report_hash.clone(),
         report_instance_id: report_instance_id.clone(),
         run_id: run_id.to_string(),
-        generated_at: Utc::now(),
+        generated_at,
         title,
         html_path: store.root().join(&html_path).to_string_lossy().to_string(),
         text_path: Some(store.root().join(&text_path).to_string_lossy().to_string()),
-        ranked_paper_ids: selected_ids.to_vec(),
-        read_paper_ids: read_results.iter().map(|r| r.paper_id.clone()).collect(),
+        ranked_paper_ids: input.selected_ids.to_vec(),
+        read_paper_ids: input
+            .read_results
+            .iter()
+            .map(|r| r.paper_id.clone())
+            .collect(),
     };
 
     let report_meta_path = StatePath::new(format!("reports/{}/report.json", run_id))?;
     store.write_json(&report_meta_path, &rendered)?;
+
+    let report_index = ReportIndex {
+        date: input.date.to_string(),
+        run_id: run_id.to_string(),
+        report_path: store
+            .root()
+            .join(report_meta_path.as_path())
+            .to_string_lossy()
+            .to_string(),
+        html_path: rendered.html_path.clone(),
+        text_path: rendered.text_path.clone(),
+        generated_at,
+        report_hash,
+    };
+    let report_index_path = StatePath::new(format!("dates/{}/report.json", input.date))?;
+    store.write_json(&report_index_path, &report_index)?;
 
     info!(
         papers = report_papers.len(),
@@ -1558,18 +1581,20 @@ async fn stage_send(
     let now = Utc::now();
 
     let receipt = daily_paper_core::deliver::receipt::deliver_email(
-        &rendered.report_hash,
-        &rendered.report_instance_id,
-        run_id,
-        Path::new(html_path),
-        text_path.map(Path::new),
-        &config.email.smtp_server,
-        config.email.smtp_port,
-        &config.email.sender,
-        &config.email.receiver,
-        &config.email.password,
-        &subject,
-        now,
+        &daily_paper_core::deliver::receipt::EmailDelivery {
+            report_hash: &rendered.report_hash,
+            report_instance_id: &rendered.report_instance_id,
+            run_id,
+            html_path: Path::new(html_path),
+            text_path: text_path.map(Path::new),
+            smtp_server: &config.email.smtp_server,
+            smtp_port: config.email.smtp_port,
+            sender: &config.email.sender,
+            receiver: &config.email.receiver,
+            password: &config.email.password,
+            subject: &subject,
+            now,
+        },
     )
     .context("failed to send email")?;
 
@@ -1598,24 +1623,21 @@ fn generate_run_id() -> String {
 }
 
 fn compute_date_window(date_arg: Option<&str>) -> anyhow::Result<DateWindow> {
-    let local_today = match date_arg {
+    let target_date = match date_arg {
         Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .context(format!("invalid date '{}', expected YYYY-MM-DD", s))?,
-        None => {
-            let now = Local::now();
-            (now - Duration::days(1)).date_naive()
-        }
+        None => Local::now().date_naive(),
     };
 
     let start = Local
-        .from_local_datetime(&local_today.and_hms_opt(0, 0, 0).unwrap())
+        .from_local_datetime(&target_date.and_hms_opt(0, 0, 0).unwrap())
         .single()
         .context("ambiguous local time")?
         .with_timezone(&Utc);
 
     let end = Local
         .from_local_datetime(
-            &(local_today + Duration::days(1))
+            &(target_date + Duration::days(1))
                 .and_hms_opt(0, 0, 0)
                 .unwrap(),
         )
@@ -1626,7 +1648,7 @@ fn compute_date_window(date_arg: Option<&str>) -> anyhow::Result<DateWindow> {
     Ok(DateWindow {
         start,
         end,
-        label: local_today.format("%Y-%m-%d").to_string(),
+        label: target_date.format("%Y-%m-%d").to_string(),
     })
 }
 
@@ -1962,7 +1984,7 @@ fn find_source_run(
     anyhow::bail!("no runs found with completed stages")
 }
 
-fn stage_output_ref<'a>(manifest: Option<&'a RunManifest>, stage: StageName) -> Option<&'a str> {
+fn stage_output_ref(manifest: Option<&RunManifest>, stage: StageName) -> Option<&str> {
     manifest?
         .stages
         .iter()
@@ -2323,23 +2345,28 @@ fn load_cached_render(
         }
     }
 
-    // Try to read from date directory
-    let html_path = store
-        .root()
-        .join(format!("dates/{}/report/report.html", date));
-    if html_path.exists() {
-        let text_path = store
-            .root()
-            .join(format!("dates/{}/report/report.txt", date));
-        return Ok((
-            html_path.to_string_lossy().to_string(),
-            if text_path.exists() {
-                Some(text_path.to_string_lossy().to_string())
-            } else {
-                None
-            },
-        ));
+    let report_index_path = StatePath::new(format!("dates/{}/report.json", date))?;
+    if let Some(index) = store.read_json::<ReportIndex>(&report_index_path)? {
+        return Ok((index.html_path, index.text_path));
     }
 
     anyhow::bail!("no cached report found for date {}", date)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_date_window_uses_local_today() {
+        let window = compute_date_window(None).unwrap();
+        assert_eq!(window.label, Local::now().date_naive().to_string());
+    }
+
+    #[test]
+    fn explicit_date_window_uses_requested_date() {
+        let window = compute_date_window(Some("2026-06-06")).unwrap();
+        assert_eq!(window.label, "2026-06-06");
+        assert_eq!(window.end - window.start, chrono::Duration::days(1));
+    }
 }

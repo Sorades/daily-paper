@@ -692,6 +692,22 @@ struct RenderedReport {
 
 `report_hash` 是内容 hash，不包含 `run_id`；`report_instance_id` 用于区分不同 run 中生成的报告实例。
 
+### ReportIndex
+
+```rust
+struct ReportIndex {
+    date: String,
+    run_id: String,
+    report_path: String,
+    html_path: String,
+    text_path: Option<String>,
+    generated_at: DateTime<Utc>,
+    report_hash: String,
+}
+```
+
+`ReportIndex` 存在 `dates/<date>/report.json`，只作为日期到最新报告 artifact 的索引；完整报告只写入 `reports/<run-id>/`。
+
 约束：
 
 - `read_paper_ids` 必须覆盖 Top N 的 `paper_id`。

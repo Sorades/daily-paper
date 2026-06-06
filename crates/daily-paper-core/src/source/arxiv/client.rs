@@ -8,7 +8,7 @@ use crate::models::candidate::CandidatePaper;
 
 use super::convert::arxmliv_entry_to_candidate;
 
-const ARXIV_API_BASE: &str = "https://export.arxiv.org/api/query";
+const ARXIV_RSS_BASE: &str = "https://rss.arxiv.org/rss";
 const USER_AGENT: &str =
     "daily-paper/0.1 (https://github.com/user/daily-paper; mailto:user@example.com)";
 
@@ -29,7 +29,7 @@ impl ArxivClient {
 
         Self {
             client,
-            base_url: ARXIV_API_BASE.to_string(),
+            base_url: ARXIV_RSS_BASE.to_string(),
             categories,
             include_cross_list,
             _max_results: 2000,
@@ -74,52 +74,16 @@ impl ArxivClient {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<CandidatePaper>> {
-        let mut all_papers = Vec::new();
-        let batch_size = 100usize;
-        let mut offset = 0usize;
+        let url = format!("{}/{}", self.base_url, category);
+        debug!(url = %url, "fetching arXiv RSS");
 
-        loop {
-            let query = if self.include_cross_list {
-                format!("cat:{}", category)
-            } else {
-                format!(
-                    "cat:{} AND submittedDate:[{} TO {}]",
-                    category,
-                    start.format("%Y%m%d%H%M"),
-                    end.format("%Y%m%d%H%M")
-                )
-            };
+        let xml = self.fetch_with_retry(&url).await?;
+        let entries = parse_arxiv_rss_feed(&xml, category, self.include_cross_list, start, end)?;
 
-            let url = format!(
-                "{}?search_query={}&start={}&max_results={}&sortBy=submittedDate&sortOrder=descending",
-                self.base_url,
-                urlencoding::encode(&query),
-                offset,
-                batch_size
-            );
-
-            debug!(url = %url, "fetching arXiv papers");
-
-            let xml = self.fetch_with_retry(&url).await?;
-            let entries = parse_arxiv_feed(&xml)?;
-
-            let is_last = entries.len() < batch_size;
-            for entry in &entries {
-                if let Some(paper) = arxmliv_entry_to_candidate(entry) {
-                    all_papers.push(paper);
-                }
-            }
-
-            if is_last {
-                break;
-            }
-            offset += batch_size;
-
-            // Respect arXiv rate limit (between requests)
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
-
-        Ok(all_papers)
+        Ok(entries
+            .iter()
+            .filter_map(arxmliv_entry_to_candidate)
+            .collect())
     }
 
     async fn fetch_with_retry(&self, url: &str) -> Result<String> {
@@ -167,13 +131,13 @@ impl ArxivClient {
             if !resp.status().is_success() {
                 let body = resp.text().await.unwrap_or_default();
                 return Err(Error::SourceUnavailable(format!(
-                    "arXiv API returned {}: {}",
+                    "arXiv RSS returned {}: {}",
                     status, body
                 )));
             }
 
             return resp.text().await.map_err(|e| {
-                Error::RetryableNetwork(format!("failed to read arXiv response: {}", e))
+                Error::RetryableNetwork(format!("failed to read arXiv RSS response: {}", e))
             });
         }
 
@@ -181,7 +145,211 @@ impl ArxivClient {
     }
 }
 
+/// Parse arXiv RSS XML into raw entry data compatible with the Atom converter.
+fn parse_arxiv_rss_feed(
+    xml: &str,
+    requested_category: &str,
+    include_cross_list: bool,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<serde_json::Value>> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut entries = Vec::new();
+    let mut in_item = false;
+    let mut current_tag = String::new();
+    let mut item = RssItem::default();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "item" {
+                    in_item = true;
+                    current_tag.clear();
+                    item = RssItem::default();
+                } else if in_item {
+                    current_tag = tag;
+                }
+            }
+            Ok(Event::Text(ref e)) if in_item && !current_tag.is_empty() => {
+                let text = e.unescape().unwrap_or_default().to_string();
+                item.push_text(&current_tag, &text);
+            }
+            Ok(Event::CData(ref e)) if in_item && !current_tag.is_empty() => {
+                let text = String::from_utf8_lossy(e.as_ref()).to_string();
+                item.push_text(&current_tag, &text);
+            }
+            Ok(Event::End(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "item" {
+                    in_item = false;
+                    if let Some(entry) =
+                        item.to_atom_like_entry(requested_category, include_cross_list, start, end)
+                    {
+                        entries.push(entry);
+                    }
+                }
+                current_tag.clear();
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    Ok(entries)
+}
+
+#[derive(Default)]
+struct RssItem {
+    title: String,
+    link: String,
+    description: String,
+    guid: String,
+    pub_date: String,
+    creators: Vec<String>,
+    categories: Vec<String>,
+    announce_type: String,
+}
+
+impl RssItem {
+    fn push_text(&mut self, tag: &str, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+
+        match tag {
+            "title" => push_joined(&mut self.title, text, " "),
+            "link" => push_joined(&mut self.link, text, ""),
+            "description" => push_joined(&mut self.description, text, "\n"),
+            "guid" => push_joined(&mut self.guid, text, ""),
+            "pubDate" => push_joined(&mut self.pub_date, text, " "),
+            "dc:creator" => self.creators.push(text.to_string()),
+            "category" => self.categories.push(text.to_string()),
+            "arxiv:announce_type" => push_joined(&mut self.announce_type, text, ""),
+            _ => {}
+        }
+    }
+
+    fn to_atom_like_entry(
+        &self,
+        requested_category: &str,
+        include_cross_list: bool,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Option<serde_json::Value> {
+        let published_at = DateTime::parse_from_rfc2822(&self.pub_date)
+            .ok()?
+            .with_timezone(&Utc);
+        if published_at < start || published_at >= end {
+            return None;
+        }
+
+        let announce_type = self
+            .announce_type()
+            .or_else(|| extract_announce_type(&self.description))?;
+        if announce_type != "new" {
+            return None;
+        }
+
+        if include_cross_list {
+            if !self.categories.iter().any(|c| c == requested_category) {
+                return None;
+            }
+        } else if self.categories.first().map(String::as_str) != Some(requested_category) {
+            return None;
+        }
+
+        let arxiv_id = extract_arxiv_id_from_guid(&self.guid)
+            .or_else(|| extract_arxiv_id_from_url(&self.link))
+            .or_else(|| extract_arxiv_id_from_description(&self.description))?;
+        let abstract_text = extract_abstract(&self.description);
+        let authors = self
+            .creators
+            .iter()
+            .flat_map(|creator| creator.split(','))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(|name| serde_json::json!({ "name": name }))
+            .collect::<Vec<_>>();
+
+        Some(serde_json::json!({
+            "id": format!("http://arxiv.org/abs/{}", arxiv_id),
+            "title": self.title,
+            "summary": abstract_text,
+            "authors": authors,
+            "published": published_at.to_rfc3339(),
+            "updated": published_at.to_rfc3339(),
+            "categories": self.categories,
+            "link_alternate": self.link,
+            "link_related": format!("https://arxiv.org/pdf/{}", arxiv_id),
+            "announce_type": announce_type,
+        }))
+    }
+
+    fn announce_type(&self) -> Option<String> {
+        let ty = self.announce_type.trim();
+        if ty.is_empty() {
+            None
+        } else {
+            Some(ty.to_string())
+        }
+    }
+}
+
+fn push_joined(target: &mut String, text: &str, sep: &str) {
+    if !target.is_empty() {
+        target.push_str(sep);
+    }
+    target.push_str(text);
+}
+
+fn extract_announce_type(description: &str) -> Option<String> {
+    let marker = "Announce Type:";
+    let rest = description.split(marker).nth(1)?.trim_start();
+    rest.split_whitespace().next().map(str::to_string)
+}
+
+fn extract_abstract(description: &str) -> String {
+    let marker = "Abstract:";
+    description
+        .split_once(marker)
+        .map(|(_, abstract_text)| abstract_text.trim().to_string())
+        .unwrap_or_else(|| description.trim().to_string())
+}
+
+fn extract_arxiv_id_from_guid(guid: &str) -> Option<String> {
+    let id = guid.rsplit(':').next()?.trim();
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+fn extract_arxiv_id_from_url(url: &str) -> Option<String> {
+    url.trim_end_matches('/').rsplit('/').next().and_then(|id| {
+        if id.is_empty() {
+            None
+        } else {
+            Some(id.to_string())
+        }
+    })
+}
+
+fn extract_arxiv_id_from_description(description: &str) -> Option<String> {
+    let rest = description.strip_prefix("arXiv:")?;
+    rest.split_whitespace().next().map(str::to_string)
+}
+
 /// Parse arXiv Atom feed XML into raw entry data.
+#[cfg(test)]
 fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
     // We parse the XML and convert to a simplified JSON structure
     // This uses quick-xml for parsing
@@ -403,5 +571,71 @@ mod tests {
         assert_eq!(authors[1]["name"], "Bob Jones");
         // Affiliation should NOT be included in the name
         assert!(!authors[0]["name"].as_str().unwrap().contains("MIT"));
+    }
+
+    #[test]
+    fn parse_rss_filters_new_items_by_date() {
+        let xml = include_str!("../../../tests/fixtures/arxiv_rss.xml");
+        let start = chrono::NaiveDate::from_ymd_opt(2023, 1, 30)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let end = chrono::NaiveDate::from_ymd_opt(2023, 1, 31)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+
+        let entries = parse_arxiv_rss_feed(xml, "cs.AI", false, start, end).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["summary"], "A test abstract about attention.");
+        assert_eq!(entries[0]["announce_type"], "new");
+        assert_eq!(entries[0]["authors"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            entries[0]["link_related"],
+            "https://arxiv.org/pdf/2301.12345v1"
+        );
+    }
+
+    #[test]
+    fn parse_rss_honors_cross_list_setting() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <item>
+      <title>Cross Listed Paper</title>
+      <link>https://arxiv.org/abs/2301.11111</link>
+      <description>arXiv:2301.11111v1 Announce Type: new
+Abstract: Cross listed abstract.</description>
+      <guid isPermaLink="false">oai:arXiv.org:2301.11111v1</guid>
+      <category>cs.CL</category>
+      <category>cs.AI</category>
+      <pubDate>Mon, 30 Jan 2023 00:00:00 -0000</pubDate>
+      <dc:creator>Alice Smith</dc:creator>
+    </item>
+  </channel>
+</rss>"#;
+        let start = chrono::NaiveDate::from_ymd_opt(2023, 1, 30)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let end = chrono::NaiveDate::from_ymd_opt(2023, 1, 31)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+
+        assert!(parse_arxiv_rss_feed(xml, "cs.AI", false, start, end)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            parse_arxiv_rss_feed(xml, "cs.AI", true, start, end)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

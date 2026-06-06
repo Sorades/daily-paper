@@ -15,6 +15,17 @@ pub struct RenderedReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportIndex {
+    pub date: String,
+    pub run_id: String,
+    pub report_path: String,
+    pub html_path: String,
+    pub text_path: Option<String>,
+    pub generated_at: DateTime<Utc>,
+    pub report_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeliveryReceipt {
     pub delivery_key: String,
     pub report_hash: String,

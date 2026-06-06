@@ -47,7 +47,7 @@ fn show_latest_run(store: &FileStateStore) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    runs.sort_by(|a, b| b.1.cmp(&a.1));
+    runs.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
     let latest_id = &runs[0].0;
     show_run(store, latest_id)
 }
@@ -130,7 +130,7 @@ fn show_run(store: &FileStateStore, run_id: &str) -> anyhow::Result<()> {
     }
 
     if let Some(ref err) = manifest.error {
-        println!("\nError: [{}] {}", format!("{:?}", err.kind), err.message);
+        println!("\nError: [{:?}] {}", err.kind, err.message);
     }
 
     Ok(())
