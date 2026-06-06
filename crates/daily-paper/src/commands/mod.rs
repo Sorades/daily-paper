@@ -2,47 +2,14 @@ mod run;
 mod serve;
 mod status;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::cli::{Cli, Commands};
 use daily_paper_core::config::{
-    default_config_path, default_state_dir, init_project_dir, is_project_mode, load_config,
+    default_config_path, default_state_dir, is_project_mode, load_config,
 };
 
 pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
-    // Handle init command first (doesn't need config)
-    if let Commands::Init = &cli.command {
-        let config_dir = Path::new(".daily-paper/config");
-        if config_dir.exists() {
-            print!(".daily-paper/config/ already exists. Overwrite? [y/N] ");
-            use std::io::{self, Write};
-            io::stdout().flush()?;
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            if !input.trim().eq_ignore_ascii_case("y") {
-                println!("Aborted.");
-                return Ok(());
-            }
-            std::fs::remove_dir_all(config_dir)?;
-        }
-        init_project_dir()?;
-        println!("Initialized config at .daily-paper/config/");
-        println!();
-        println!("Directory structure:");
-        println!("  .daily-paper/");
-        println!("  ├── config/");
-        println!("  │   ├── config.toml        # Edit this with your settings");
-        println!("  │   └── templates/");
-        println!("  │       ├── system_prompt.txt");
-        println!("  │       └── report.html");
-        println!("  └── state/                 # Auto-managed (cache, runs, reports)");
-        println!();
-        println!("Next steps:");
-        println!("  1. Edit .daily-paper/config/config.toml");
-        println!("  2. Run: cargo run -- run --dry-run");
-        return Ok(());
-    }
-
     // Serve command loads config for web settings
     if let Commands::Serve(args) = &cli.command {
         let config_path = cli
@@ -67,11 +34,11 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         .ok_or_else(|| {
             if is_project_mode() {
                 anyhow::anyhow!(
-                    "config file not found in .daily-paper/; run 'cargo run -- init' to create default config"
+                    "config file not found in .daily-paper/config/; create config.toml manually or copy from config.example.toml"
                 )
             } else {
                 anyhow::anyhow!(
-                    "no config file found; specify with --config or run 'cargo run -- init' to create project directory"
+                    "no config file found; specify with --config or create .daily-paper/config/config.toml"
                 )
             }
         })?;
@@ -92,7 +59,6 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Run(args) => run::execute(&config_path, &state_dir, args).await?,
         Commands::Status(args) => status::execute(&state_dir, args).await?,
-        Commands::Init => unreachable!(),
         Commands::Serve(_) => unreachable!(),
     }
 

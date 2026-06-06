@@ -8,6 +8,9 @@ pub struct ReadSelection {
     pub rerank_cache_key: String,
     pub top_n: usize,
     pub selected_paper_ids: Vec<String>,
+    /// Per-paper scores from reranking (paper_id, score). Optional for backward compat.
+    #[serde(default)]
+    pub paper_scores: Vec<(String, f32)>,
 }
 
 /// Compute the selection cache key.
@@ -25,15 +28,23 @@ pub fn select_top_n(
     rerank_cache_key: &str,
     ranked_paper_ids: &[String],
     top_n: usize,
+    paper_scores: Vec<(String, f32)>,
 ) -> ReadSelection {
     let selected: Vec<String> = ranked_paper_ids.iter().take(top_n).cloned().collect();
     let selection_id = compute_selection_id(rerank_cache_key, top_n);
+
+    // Filter scores to only include selected papers
+    let selected_scores: Vec<(String, f32)> = paper_scores
+        .into_iter()
+        .filter(|(id, _)| selected.contains(id))
+        .collect();
 
     ReadSelection {
         selection_id,
         rerank_cache_key: rerank_cache_key.to_string(),
         top_n,
         selected_paper_ids: selected,
+        paper_scores: selected_scores,
     }
 }
 
@@ -70,7 +81,7 @@ mod tests {
     #[test]
     fn selection_takes_top_n() {
         let ids = vec!["p1".into(), "p2".into(), "p3".into(), "p4".into()];
-        let sel = select_top_n("rk1", &ids, 2);
+        let sel = select_top_n("rk1", &ids, 2, vec![]);
         assert_eq!(sel.selected_paper_ids, vec!["p1", "p2"]);
         assert_eq!(sel.top_n, 2);
     }
@@ -78,15 +89,15 @@ mod tests {
     #[test]
     fn selection_more_than_available() {
         let ids = vec!["p1".into()];
-        let sel = select_top_n("rk1", &ids, 10);
+        let sel = select_top_n("rk1", &ids, 10, vec![]);
         assert_eq!(sel.selected_paper_ids, vec!["p1"]);
     }
 
     #[test]
     fn selection_deterministic() {
         let ids = vec!["p1".into(), "p2".into()];
-        let sel1 = select_top_n("rk1", &ids, 2);
-        let sel2 = select_top_n("rk1", &ids, 2);
+        let sel1 = select_top_n("rk1", &ids, 2, vec![]);
+        let sel2 = select_top_n("rk1", &ids, 2, vec![]);
         assert_eq!(sel1.selection_id, sel2.selection_id);
     }
 

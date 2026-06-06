@@ -1,6 +1,15 @@
 use crate::models::pdf::PaperSection;
 use regex::Regex;
 
+/// Find the largest byte index <= `max` that falls on a UTF-8 char boundary.
+fn safe_char_boundary(text: &str, max: usize) -> usize {
+    let mut boundary = max.min(text.len());
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
+}
+
 /// Section header patterns commonly found in academic papers.
 const SECTION_PATTERNS: &[&str] = &[
     r"(?i)^\s*(\d+\.?\s+)?(introduction|background)\s*$",
@@ -101,7 +110,7 @@ pub fn select_sections_for_reading(
 
     // Always include the beginning of the paper (first ~2000 chars)
     // This typically contains title, authors, affiliations, and abstract
-    let header_chars = 2000usize.min(text.len()).min(max_chars / 3);
+    let header_chars = safe_char_boundary(text, 2000usize.min(max_chars / 3));
     let header_text = &text[..header_chars];
 
     let mut selected_sections: Vec<&PaperSection> = Vec::new();
@@ -150,7 +159,7 @@ pub fn select_sections_for_reading(
 
     // If no sections found and no header, take the first max_chars of text
     if result.is_empty() {
-        let end = text.len().min(max_chars);
+        let end = safe_char_boundary(text, max_chars);
         result = text[..end].to_string();
     }
 

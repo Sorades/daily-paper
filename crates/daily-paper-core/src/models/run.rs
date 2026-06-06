@@ -109,6 +109,54 @@ impl StageName {
             Self::Send,
         ]
     }
+
+    /// Stages that must be completed before this stage can run.
+    pub fn required_stages(&self) -> Vec<StageName> {
+        match self {
+            Self::ZoteroSync => vec![],
+            Self::SourceFetch => vec![Self::ZoteroSync],
+            Self::Deduplicate => vec![Self::ZoteroSync, Self::SourceFetch],
+            Self::Embedding => vec![Self::ZoteroSync, Self::SourceFetch, Self::Deduplicate],
+            Self::Rerank => {
+                vec![
+                    Self::ZoteroSync,
+                    Self::SourceFetch,
+                    Self::Deduplicate,
+                    Self::Embedding,
+                ]
+            }
+            Self::PdfFetch | Self::TextExtract | Self::MetadataFetch | Self::DeepRead => {
+                vec![
+                    Self::ZoteroSync,
+                    Self::SourceFetch,
+                    Self::Deduplicate,
+                    Self::Embedding,
+                    Self::Rerank,
+                ]
+            }
+            Self::Render => {
+                vec![
+                    Self::ZoteroSync,
+                    Self::SourceFetch,
+                    Self::Deduplicate,
+                    Self::Embedding,
+                    Self::Rerank,
+                    Self::DeepRead,
+                ]
+            }
+            Self::Send => {
+                vec![
+                    Self::ZoteroSync,
+                    Self::SourceFetch,
+                    Self::Deduplicate,
+                    Self::Embedding,
+                    Self::Rerank,
+                    Self::DeepRead,
+                    Self::Render,
+                ]
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

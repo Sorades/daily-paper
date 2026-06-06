@@ -8,7 +8,9 @@ use crate::models::candidate::CandidatePaper;
 
 use super::convert::arxmliv_entry_to_candidate;
 
-const ARXIV_API_BASE: &str = "http://export.arxiv.org/api/query";
+const ARXIV_API_BASE: &str = "https://export.arxiv.org/api/query";
+const USER_AGENT: &str =
+    "daily-paper/0.1 (https://github.com/user/daily-paper; mailto:user@example.com)";
 
 pub struct ArxivClient {
     client: Client,
@@ -20,8 +22,13 @@ pub struct ArxivClient {
 
 impl ArxivClient {
     pub fn new(categories: Vec<String>, include_cross_list: bool) -> Self {
+        let client = Client::builder()
+            .user_agent(USER_AGENT)
+            .build()
+            .expect("failed to build HTTP client");
+
         Self {
-            client: Client::new(),
+            client,
             base_url: ARXIV_API_BASE.to_string(),
             categories,
             include_cross_list,
@@ -43,7 +50,12 @@ impl ArxivClient {
     ) -> Result<Vec<CandidatePaper>> {
         let mut all_papers = Vec::new();
 
-        for category in &self.categories {
+        for (i, category) in self.categories.iter().enumerate() {
+            if i > 0 {
+                // Delay between categories to avoid rate limiting
+                debug!(delay_secs = 10, "waiting between categories");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
             let papers = self.fetch_category(category, start, end).await?;
             all_papers.extend(papers);
         }
@@ -111,11 +123,12 @@ impl ArxivClient {
     }
 
     async fn fetch_with_retry(&self, url: &str) -> Result<String> {
-        let max_retries = 3;
+        let max_retries = 5; // More retries for rate limiting
         let mut last_err = None;
 
         for attempt in 0..=max_retries {
-            if attempt > 0 {
+            if attempt > 0 && !matches!(last_err, Some(Error::RateLimited { .. })) {
+                // Only apply exponential backoff if not rate limited
                 let delay = Duration::from_secs(5 * 2u64.pow(attempt));
                 warn!(
                     attempt,
@@ -133,15 +146,17 @@ impl ArxivClient {
                 .await
                 .map_err(|e| Error::RetryableNetwork(e.to_string()))?;
 
-            if resp.status().as_u16() == 503 {
-                // arXiv uses 503 for rate limiting with Retry-After
+            let status = resp.status().as_u16();
+
+            // Handle rate limiting: 429 (Too Many Requests) and 503 (Service Unavailable)
+            if status == 429 || status == 503 {
                 let retry_after = resp
                     .headers()
                     .get("Retry-After")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(30);
-                warn!(retry_after, "arXiv rate limited (503)");
+                    .unwrap_or(60); // Default to 60s if header missing
+                warn!(status, retry_after, "arXiv rate limited");
                 tokio::time::sleep(Duration::from_secs(retry_after)).await;
                 last_err = Some(Error::RateLimited {
                     retry_after_secs: retry_after,
@@ -150,7 +165,6 @@ impl ArxivClient {
             }
 
             if !resp.status().is_success() {
-                let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 return Err(Error::SourceUnavailable(format!(
                     "arXiv API returned {}: {}",

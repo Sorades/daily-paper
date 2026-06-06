@@ -32,6 +32,7 @@ impl FileStateStore {
             "cache/models",
             "cache/rerank",
             "cache/papers",
+            "dates",
             "reports",
             "deliveries/history",
         ] {
@@ -39,6 +40,21 @@ impl FileStateStore {
             std::fs::create_dir_all(&dir)?;
         }
         Ok(())
+    }
+
+    /// Ensure a date-specific directory exists with all stage subdirectories.
+    pub fn ensure_date_dir(&self, date: &str) -> Result<()> {
+        let date_dir = self.root.join("dates").join(date);
+        for subdir in &["", "read", "report"] {
+            let dir = date_dir.join(subdir);
+            std::fs::create_dir_all(&dir)?;
+        }
+        Ok(())
+    }
+
+    /// Get the path to a date directory.
+    pub fn date_dir(&self, date: &str) -> PathBuf {
+        self.root.join("dates").join(date)
     }
 
     /// Acquire a run lock.

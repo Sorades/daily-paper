@@ -100,6 +100,9 @@ fn resolve_env(var_name: &str) -> Result<String> {
 
 impl ResolvedConfig {
     pub fn from_raw(raw: &RawConfig) -> Result<Self> {
+        // Validate required fields
+        super::validation::validate(raw)?;
+
         Ok(Self {
             zotero: ResolvedZoteroConfig {
                 user_id: raw.zotero.user_id.clone(),

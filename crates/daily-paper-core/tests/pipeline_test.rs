@@ -96,7 +96,7 @@ fn test_selection_takes_top_n() {
         "paper_c".to_string(),
     ];
 
-    let selection = select_top_n("test_cache_key", &ids, 2);
+    let selection = select_top_n("test_cache_key", &ids, 2, vec![]);
     assert_eq!(selection.selected_paper_ids.len(), 2);
     assert_eq!(selection.selected_paper_ids[0], "paper_a");
     assert_eq!(selection.selected_paper_ids[1], "paper_b");

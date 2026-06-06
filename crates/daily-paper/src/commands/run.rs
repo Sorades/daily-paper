@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
 use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::cli::RunArgs;
@@ -39,6 +41,16 @@ use daily_paper_core::zotero::profile::{
     build_collection_paths, compute_rules_hash, compute_snapshot_id,
 };
 
+/// Cached embeddings for a pipeline run.
+/// Mapping of paper IDs to their embedding hashes (for date-based cache).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EmbeddingIndex {
+    /// (paper_id, input_hash) for candidate papers
+    candidate_hashes: Vec<(String, String)>,
+    /// (library_id, weight, input_hash) for library papers
+    library_hashes: Vec<(String, f32, String)>,
+}
+
 pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> anyhow::Result<()> {
     let (_raw, resolved) = load_config(config_path)
         .with_context(|| format!("failed to load config from {}", config_path.display()))?;
@@ -68,7 +80,8 @@ pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> any
 
     // If --stage is specified, load source run manifest for cached data
     let source_manifest: Option<RunManifest> = if stage_filter.is_some() {
-        let source_run_id = find_source_run(&store, args.from_run.as_deref())?;
+        let source_run_id =
+            find_source_run(&store, args.from_run.as_deref(), stage_filter.as_deref())?;
         info!(source_run = %source_run_id, "loading source run for cached data");
         let manifest_path = StatePath::new(format!("runs/{}/manifest.json", source_run_id))?;
         let m: Option<RunManifest> = store.read_json(&manifest_path)?;
@@ -162,18 +175,42 @@ pub async fn run_pipeline(
     event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
     manifest_path: &StatePath,
 ) -> anyhow::Result<()> {
+    let date = &date_window.label;
+    let cache_date = source_manifest
+        .map(|m| m.date_window.label.as_str())
+        .unwrap_or(date);
+    store.ensure_date_dir(date)?;
+
     let should_run =
         |stage: &StageName| -> bool { stage_filter.map(|f| f.contains(stage)).unwrap_or(true) };
+
+    // Track which stages have been completed in this run
+    let mut completed_stages: Vec<StageName> = Vec::new();
+
+    // Helper to check if all requested stages are done
+    let all_requested_done = |completed: &[StageName], filter: Option<&[StageName]>| -> bool {
+        if let Some(filter) = filter {
+            filter.iter().all(|s| completed.contains(s))
+        } else {
+            false // No filter means run all stages
+        }
+    };
 
     // Stage 1: Zotero sync
     let snapshot = if should_run(&StageName::ZoteroSync) {
         emit_event(event_tx, run_id, StageName::ZoteroSync, true);
-        let r = stage_zotero_sync(store, config, manifest, args.force_zotero_sync).await;
+        let r = stage_zotero_sync(store, config, manifest, args.force_zotero_sync, date).await;
         emit_stage_end(event_tx, manifest, run_id, StageName::ZoteroSync, &r);
         let _ = store.write_json(manifest_path, manifest);
-        r?
+        completed_stages.push(StageName::ZoteroSync);
+        let snapshot = r?;
+        if all_requested_done(&completed_stages, stage_filter) {
+            info!("all requested stages completed");
+            return Ok(());
+        }
+        snapshot
     } else {
-        load_cached_snapshot(store, source_manifest)?
+        load_cached_snapshot(store, cache_date, source_manifest)?
     };
 
     // Stage 2: Source fetch
@@ -182,9 +219,15 @@ pub async fn run_pipeline(
         let r = stage_source_fetch(store, config, manifest, date_window).await;
         emit_stage_end(event_tx, manifest, run_id, StageName::SourceFetch, &r);
         let _ = store.write_json(manifest_path, manifest);
-        r?
+        completed_stages.push(StageName::SourceFetch);
+        let candidates = r?;
+        if all_requested_done(&completed_stages, stage_filter) {
+            info!("all requested stages completed");
+            return Ok(());
+        }
+        candidates
     } else {
-        load_cached_candidates(store, source_manifest)?
+        load_cached_candidates(store, cache_date, source_manifest)?
     };
 
     if candidates.is_empty() {
@@ -196,12 +239,18 @@ pub async fn run_pipeline(
     // Stage 3: Deduplicate
     let mut dedup = if should_run(&StageName::Deduplicate) {
         emit_event(event_tx, run_id, StageName::Deduplicate, true);
-        let r = stage_deduplicate(store, manifest, run_id, &candidates, &snapshot).await;
+        let r = stage_deduplicate(store, manifest, run_id, &candidates, &snapshot, date).await;
         emit_stage_end(event_tx, manifest, run_id, StageName::Deduplicate, &r);
         let _ = store.write_json(manifest_path, manifest);
-        r?
+        completed_stages.push(StageName::Deduplicate);
+        let dedup = r?;
+        if all_requested_done(&completed_stages, stage_filter) {
+            info!("all requested stages completed");
+            return Ok(());
+        }
+        dedup
     } else {
-        load_cached_dedup(store, source_manifest, &candidates, &snapshot)?
+        load_cached_dedup(store, cache_date, &candidates, &snapshot)?
     };
 
     if dedup.candidates.is_empty() {
@@ -225,13 +274,20 @@ pub async fn run_pipeline(
     // Stage 4: Embedding
     let (candidate_embs, library_embs) = if should_run(&StageName::Embedding) {
         emit_event(event_tx, run_id, StageName::Embedding, true);
-        let r = stage_embedding(store, config, manifest, &dedup.candidates, &snapshot).await;
+        let r = stage_embedding(store, config, manifest, &dedup.candidates, &snapshot, date).await;
         emit_stage_end(event_tx, manifest, run_id, StageName::Embedding, &r);
         let _ = store.write_json(manifest_path, manifest);
+        completed_stages.push(StageName::Embedding);
         r?
     } else {
-        load_cached_embeddings(store, source_manifest, &dedup.candidates, &snapshot)?
+        load_cached_embeddings(store, cache_date, &dedup.candidates, &snapshot)?
     };
+
+    // Check if all requested stages are done
+    if all_requested_done(&completed_stages, stage_filter) {
+        info!("all requested stages completed");
+        return Ok(());
+    }
 
     // Stage 5: Rerank + selection
     let (selection, rerank_scores) = if should_run(&StageName::Rerank) {
@@ -244,14 +300,22 @@ pub async fn run_pipeline(
             &candidate_embs,
             &library_embs,
             &snapshot,
+            date,
         )
         .await;
         emit_stage_end(event_tx, manifest, run_id, StageName::Rerank, &r);
         let _ = store.write_json(manifest_path, manifest);
+        completed_stages.push(StageName::Rerank);
         r?
     } else {
-        load_cached_rerank(store, source_manifest)?
+        load_cached_rerank(store, cache_date, source_manifest)?
     };
+
+    // Check if all requested stages are done
+    if all_requested_done(&completed_stages, stage_filter) {
+        info!("all requested stages completed");
+        return Ok(());
+    }
 
     if selection.selected_paper_ids.is_empty() {
         warn!("no papers selected after rerank");
@@ -269,14 +333,22 @@ pub async fn run_pipeline(
             &selection.selected_paper_ids,
             &dedup.candidates,
             args.force_read,
+            date,
         )
         .await;
         emit_stage_end(event_tx, manifest, run_id, StageName::DeepRead, &r);
         let _ = store.write_json(manifest_path, manifest);
+        completed_stages.push(StageName::DeepRead);
         r?
     } else {
-        load_cached_read_results(store, source_manifest)?
+        load_cached_read_results(store, cache_date, source_manifest)?
     };
+
+    // Check if all requested stages are done
+    if all_requested_done(&completed_stages, stage_filter) {
+        info!("all requested stages completed");
+        return Ok(());
+    }
 
     // Stage 10: Render
     let (html_path, text_path) = if should_run(&StageName::Render) {
@@ -289,13 +361,15 @@ pub async fn run_pipeline(
             &dedup.candidates,
             &read_results,
             &rerank_scores,
+            date,
         )
         .await;
         emit_stage_end(event_tx, manifest, run_id, StageName::Render, &r);
         let _ = store.write_json(manifest_path, manifest);
+        completed_stages.push(StageName::Render);
         r?
     } else {
-        load_cached_render(store, source_manifest, run_id)?
+        load_cached_render(store, cache_date, source_manifest)?
     };
 
     // Stage 11: Send
@@ -320,12 +394,17 @@ pub async fn run_pipeline(
             }
             skip_stage(manifest, StageName::Send);
         } else {
+            let report_run_id = if should_run(&StageName::Render) {
+                run_id
+            } else {
+                source_manifest.map(|m| m.run_id.as_str()).unwrap_or(run_id)
+            };
             emit_event(event_tx, run_id, StageName::Send, true);
             let r = stage_send(
                 store,
                 config,
                 manifest,
-                run_id,
+                report_run_id,
                 &html_path,
                 text_path.as_deref(),
                 args.force_send,
@@ -333,6 +412,7 @@ pub async fn run_pipeline(
             .await;
             emit_stage_end(event_tx, manifest, run_id, StageName::Send, &r);
             let _ = store.write_json(manifest_path, manifest);
+            completed_stages.push(StageName::Send);
             r?
         }
     }
@@ -347,6 +427,7 @@ async fn stage_zotero_sync(
     config: &ResolvedConfig,
     manifest: &mut RunManifest,
     force: bool,
+    date: &str,
 ) -> anyhow::Result<ZoteroSnapshot> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -455,6 +536,10 @@ async fn stage_zotero_sync(
     let snap_path = StatePath::new(format!("cache/zotero/snapshots/{}.json", snapshot_id))?;
     store.write_json(&snap_path, &snapshot)?;
 
+    // Write snapshot ID to date directory
+    let snapshot_id_path = StatePath::new(format!("dates/{}/snapshot_id.txt", date))?;
+    store.write_string(&snapshot_id_path, &snapshot_id)?;
+
     // Update sync state
     let new_sync_state = daily_paper_core::models::zotero::ZoteroSyncState {
         user_id: config.zotero.user_id.clone(),
@@ -485,6 +570,7 @@ async fn stage_source_fetch(
     manifest: &mut RunManifest,
     date_window: &DateWindow,
 ) -> anyhow::Result<Vec<CandidatePaper>> {
+    let date = &date_window.label;
     let stage_start = Utc::now();
     let mut record = StageRecord {
         stage: StageName::SourceFetch,
@@ -552,19 +638,25 @@ async fn stage_source_fetch(
     // Cache results
     store.write_json(&cache_path, &all_candidates)?;
 
+    // Write candidates to date directory
+    let candidates_date_path = StatePath::new(format!("dates/{}/candidates.json", date))?;
+    store.write_json(&candidates_date_path, &all_candidates)?;
+
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
+    record.output_ref = Some(cache_key);
     manifest.stages.push(record);
 
     Ok(all_candidates)
 }
 
 async fn stage_deduplicate(
-    _store: &FileStateStore,
+    store: &FileStateStore,
     manifest: &mut RunManifest,
     run_id: &str,
     candidates: &[CandidatePaper],
     snapshot: &ZoteroSnapshot,
+    date: &str,
 ) -> anyhow::Result<DedupResult> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -695,6 +787,10 @@ async fn stage_deduplicate(
         "deduplication complete"
     );
 
+    // Write dedup result to date directory
+    let dedup_path = StatePath::new(format!("dates/{}/dedup.json", date))?;
+    store.write_json(&dedup_path, &dedup)?;
+
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
     manifest.stages.push(record);
@@ -708,6 +804,7 @@ async fn stage_embedding(
     manifest: &mut RunManifest,
     candidates: &[CandidatePaper],
     snapshot: &ZoteroSnapshot,
+    date: &str,
 ) -> anyhow::Result<(Vec<(String, Vec<f32>)>, Vec<(String, Vec<f32>, f32)>)> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -786,8 +883,9 @@ async fn stage_embedding(
         None
     };
 
-    // Build candidate embeddings
+    // Build candidate embeddings and track hashes
     let mut candidate_embs = Vec::new();
+    let mut candidate_hashes: Vec<(String, String)> = Vec::new();
 
     // Add cached candidates
     for candidate in candidates {
@@ -804,6 +902,7 @@ async fn stage_embedding(
         if let Some(bytes) = store.read_bytes(&vec_path)? {
             let vec = bytes_to_vec(&bytes);
             candidate_embs.push((candidate.paper_id.clone(), vec));
+            candidate_hashes.push((candidate.paper_id.clone(), input_hash.clone()));
         }
     }
 
@@ -814,25 +913,34 @@ async fn stage_embedding(
             let vec_path = &candidate_vec_paths[idx];
             store.write_bytes(vec_path, &vec_to_bytes(&embeddings[idx]))?;
             candidate_embs.push((candidate.paper_id.clone(), embeddings[idx].clone()));
+            // Extract input_hash from vec_path
+            let input_hash = vec_path
+                .as_path()
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            candidate_hashes.push((candidate.paper_id.clone(), input_hash));
         }
     }
 
-    // Sort by original order
-    candidate_embs.sort_by(|a, b| {
-        let ia = candidates
-            .iter()
-            .position(|c| c.paper_id == a.0)
-            .unwrap_or(0);
-        let ib = candidates
-            .iter()
-            .position(|c| c.paper_id == b.0)
-            .unwrap_or(0);
-        ia.cmp(&ib)
+    // Sort by original order using HashMap for O(n log n) instead of O(n^2 log n)
+    let index_map: HashMap<&str, usize> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.paper_id.as_str(), i))
+        .collect();
+    candidate_embs.sort_by_key(|(paper_id, _)| {
+        index_map
+            .get(paper_id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
     });
 
     // Build interest profile and embed library
     let profile = build_interest_profile(snapshot, &config.zotero.filters);
     let mut library_embs = Vec::new();
+    let mut library_hashes: Vec<(String, f32, String)> = Vec::new();
     let mut uncached_library: Vec<(String, f32, String, StatePath)> = Vec::new(); // (lib_id, weight, text, vec_path)
 
     for pref in &profile.papers {
@@ -855,6 +963,7 @@ async fn stage_embedding(
 
             if let Some(bytes) = store.read_bytes(&vec_path)? {
                 library_embs.push((pref.library_id.clone(), bytes_to_vec(&bytes), pref.weight));
+                library_hashes.push((pref.library_id.clone(), pref.weight, input_hash));
             } else {
                 uncached_library.push((pref.library_id.clone(), pref.weight, input_text, vec_path));
             }
@@ -902,6 +1011,14 @@ async fn stage_embedding(
             let (ref lib_id, weight, _, ref vec_path) = uncached_library[i];
             store.write_bytes(vec_path, &vec_to_bytes(emb))?;
             library_embs.push((lib_id.clone(), emb.clone(), weight));
+            // Extract input_hash from vec_path
+            let input_hash = vec_path
+                .as_path()
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            library_hashes.push((lib_id.clone(), weight, input_hash));
         }
     }
 
@@ -910,6 +1027,14 @@ async fn stage_embedding(
         library = library_embs.len(),
         "embedding complete"
     );
+
+    // Write embedding index to date directory (only hashes, not full vectors)
+    let index = EmbeddingIndex {
+        candidate_hashes,
+        library_hashes,
+    };
+    let index_date_path = StatePath::new(format!("dates/{}/embeddings.json", date))?;
+    store.write_json(&index_date_path, &index)?;
 
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
@@ -926,6 +1051,7 @@ async fn stage_rerank(
     candidate_embs: &[(String, Vec<f32>)],
     library_embs: &[(String, Vec<f32>, f32)],
     snapshot: &ZoteroSnapshot,
+    date: &str,
 ) -> anyhow::Result<(
     daily_paper_core::rerank::selection::ReadSelection,
     Vec<(String, f32)>,
@@ -960,17 +1086,21 @@ async fn stage_rerank(
         &sha256_hex(format!("top_k={}", config.reranker.top_k_library_matches).as_bytes()),
     );
 
-    let selection = select_top_n(&rerank_cache_key, &ranked_ids, config.reader.top_n);
-
-    // Collect scores for selected papers
-    let scores: Vec<(String, f32)> = selection
-        .selected_paper_ids
+    // Build scores vector for all ranked papers
+    let paper_scores: Vec<(String, f32)> = ranked
         .iter()
-        .filter_map(|pid| {
-            let r = ranked.iter().find(|r| &r.paper_id == pid)?;
-            Some((pid.clone(), r.score))
-        })
+        .map(|r| (r.paper_id.clone(), r.score))
         .collect();
+
+    let selection = select_top_n(
+        &rerank_cache_key,
+        &ranked_ids,
+        config.reader.top_n,
+        paper_scores,
+    );
+
+    // Use scores from selection (already stored)
+    let scores = selection.paper_scores.clone();
 
     info!(
         ranked = ranked.len(),
@@ -988,6 +1118,10 @@ async fn stage_rerank(
     let sel_path = StatePath::new(format!("cache/rerank/{}.json", selection.selection_id))?;
     store.write_json(&sel_path, &selection)?;
 
+    // Write rerank result to date directory
+    let rerank_date_path = StatePath::new(format!("dates/{}/rerank.json", date))?;
+    store.write_json(&rerank_date_path, &selection)?;
+
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
     record.output_ref = Some(selection.selection_id.clone());
@@ -1003,6 +1137,7 @@ async fn stage_deep_read(
     selected_ids: &[String],
     candidates: &[CandidatePaper],
     force_read: bool,
+    date: &str,
 ) -> anyhow::Result<Vec<ReadResult>> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -1224,6 +1359,10 @@ async fn stage_deep_read(
         ))?;
         store.write_json(&read_result_path, &read_result)?;
 
+        // Write read result to date directory
+        let read_date_path = StatePath::new(format!("dates/{}/read/{}.json", date, paper_id))?;
+        store.write_json(&read_date_path, &read_result)?;
+
         read_results.push(read_result);
     }
 
@@ -1238,12 +1377,20 @@ async fn stage_deep_read(
         "deep read complete"
     );
 
+    // Store paper IDs as output_ref for cache loading
+    let paper_ids_str = read_results
+        .iter()
+        .map(|r| r.paper_id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+
     record.status = if read_results.len() == selected_ids.len() {
         StageStatus::Succeeded
     } else {
         StageStatus::Failed
     };
     record.finished_at = Some(Utc::now());
+    record.output_ref = Some(paper_ids_str);
     manifest.stages.push(record);
 
     Ok(read_results)
@@ -1257,6 +1404,7 @@ async fn stage_render(
     candidates: &[CandidatePaper],
     read_results: &[ReadResult],
     scores: &[(String, f32)],
+    date: &str,
 ) -> anyhow::Result<(String, Option<String>)> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -1308,6 +1456,12 @@ async fn stage_render(
 
     store.write_string(&StatePath::new(&html_path)?, &html_body)?;
     store.write_string(&StatePath::new(&text_path)?, &text_body)?;
+
+    // Write report to date directory
+    let html_date_path = format!("dates/{}/report/report.html", date);
+    let text_date_path = format!("dates/{}/report/report.txt", date);
+    store.write_string(&StatePath::new(&html_date_path)?, &html_body)?;
+    store.write_string(&StatePath::new(&text_date_path)?, &text_body)?;
 
     let report_hash = sha256_hex(html_body.as_bytes());
     let report_instance_id = format!("{}-{}", run_id, &report_hash[..8]);
@@ -1752,11 +1906,15 @@ fn emit_stage_end<T>(
 
 // ── Cached data loaders for --stage ─────────────────────────────────
 
-fn find_source_run(store: &FileStateStore, from_run: Option<&str>) -> anyhow::Result<String> {
+fn find_source_run(
+    store: &FileStateStore,
+    from_run: Option<&str>,
+    stage_filter: Option<&[StageName]>,
+) -> anyhow::Result<String> {
     if let Some(id) = from_run {
         return Ok(id.to_string());
     }
-    // Find latest run with a manifest
+    // Find latest run with a manifest that has stages
     let runs_dir = store.root().join("runs");
     if !runs_dir.exists() {
         anyhow::bail!("no runs found");
@@ -1775,60 +1933,195 @@ fn find_source_run(store: &FileStateStore, from_run: Option<&str>) -> anyhow::Re
                     .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
             )
     });
-    entries
-        .first()
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .ok_or_else(|| anyhow::anyhow!("no runs found"))
+
+    // Find the first entry with stages that has the required stages
+    for entry in &entries {
+        let manifest_path = StatePath::new(format!(
+            "runs/{}/manifest.json",
+            entry.file_name().to_string_lossy()
+        ))?;
+        if let Ok(Some(manifest)) = store.read_json::<RunManifest>(&manifest_path) {
+            if manifest.stages.is_empty() {
+                continue;
+            }
+            // If we have a stage filter, check that the run has all required stages
+            if let Some(filter) = stage_filter {
+                let required_stages: Vec<StageName> =
+                    filter.iter().flat_map(|s| s.required_stages()).collect();
+                let has_all = required_stages
+                    .iter()
+                    .all(|required| manifest.stages.iter().any(|s| &s.stage == required));
+                if !has_all {
+                    continue;
+                }
+            }
+            return Ok(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+
+    anyhow::bail!("no runs found with completed stages")
+}
+
+fn stage_output_ref<'a>(manifest: Option<&'a RunManifest>, stage: StageName) -> Option<&'a str> {
+    manifest?
+        .stages
+        .iter()
+        .find(|s| s.stage == stage && s.status == StageStatus::Succeeded)
+        .and_then(|s| s.output_ref.as_deref())
 }
 
 fn load_cached_snapshot(
     store: &FileStateStore,
+    date: &str,
     source: Option<&RunManifest>,
 ) -> anyhow::Result<ZoteroSnapshot> {
-    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached snapshot"))?;
-    let snap_ref = source
-        .stages
-        .iter()
-        .find(|s| s.stage == StageName::ZoteroSync)
-        .and_then(|s| s.output_ref.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("source run has no ZoteroSync output"))?;
-    let path = StatePath::new(format!("cache/zotero/snapshots/{}.json", snap_ref))?;
-    store
-        .read_json(&path)?
-        .ok_or_else(|| anyhow::anyhow!("cached snapshot not found: {}", snap_ref))
+    if let Some(snapshot_id) = stage_output_ref(source, StageName::ZoteroSync) {
+        let snap_path = StatePath::new(format!("cache/zotero/snapshots/{}.json", snapshot_id))?;
+        if let Some(snapshot) = store.read_json::<ZoteroSnapshot>(&snap_path)? {
+            return Ok(snapshot);
+        }
+        anyhow::bail!("cached snapshot not found: {}", snapshot_id);
+    }
+
+    // Try to read snapshot ID from date directory
+    let snapshot_id_path = StatePath::new(format!("dates/{}/snapshot_id.txt", date))?;
+    if let Some(snapshot_id) = store.read_string(&snapshot_id_path)? {
+        let snap_path = StatePath::new(format!("cache/zotero/snapshots/{}.json", snapshot_id))?;
+        if let Some(snapshot) = store.read_json::<ZoteroSnapshot>(&snap_path)? {
+            return Ok(snapshot);
+        }
+    }
+
+    // Fallback: find the most recent snapshot
+    let snapshots_dir = store.root().join("cache/zotero/snapshots");
+    if snapshots_dir.exists() {
+        let mut entries: Vec<_> = std::fs::read_dir(&snapshots_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "json")
+                    .unwrap_or(false)
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            b.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                .cmp(
+                    &a.metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                )
+        });
+        if let Some(entry) = entries.first() {
+            // Make path relative to store root
+            let relative_path = entry
+                .path()
+                .strip_prefix(store.root())
+                .unwrap_or(&entry.path())
+                .to_string_lossy()
+                .to_string();
+            let path = StatePath::new(relative_path)?;
+            if let Some(snapshot) = store.read_json::<ZoteroSnapshot>(&path)? {
+                return Ok(snapshot);
+            }
+        }
+    }
+
+    anyhow::bail!("no cached snapshot found for date {}", date)
 }
 
 fn load_cached_candidates(
     store: &FileStateStore,
+    date: &str,
     source: Option<&RunManifest>,
 ) -> anyhow::Result<Vec<CandidatePaper>> {
-    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached candidates"))?;
-    let hash = match source
-        .stages
-        .iter()
-        .find(|s| s.stage == StageName::SourceFetch)
-        .and_then(|s| s.output_ref.as_deref())
-    {
-        Some(h) => h,
-        None => return Ok(Vec::new()), // source run had no candidates
-    };
-    let path = StatePath::new(format!("cache/arxiv/{}.json", hash))?;
-    Ok(store.read_json(&path)?.unwrap_or_default())
+    if let Some(cache_key) = stage_output_ref(source, StageName::SourceFetch) {
+        let path = StatePath::new(format!("cache/arxiv/{}.json", cache_key))?;
+        return Ok(store.read_json(&path)?.unwrap_or_default());
+    }
+
+    // Try to read from date directory
+    let candidates_path = StatePath::new(format!("dates/{}/candidates.json", date))?;
+    if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&candidates_path)? {
+        if !candidates.is_empty() {
+            info!(
+                count = candidates.len(),
+                "loaded candidates from date cache"
+            );
+            return Ok(candidates);
+        }
+    }
+
+    // Fallback: find the most recent non-empty arxiv cache file
+    let arxiv_dir = store.root().join("cache/arxiv");
+    if arxiv_dir.exists() {
+        let mut entries: Vec<_> = std::fs::read_dir(&arxiv_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "json")
+                    .unwrap_or(false)
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            b.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                .cmp(
+                    &a.metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                )
+        });
+        debug!(count = entries.len(), "found arxiv cache files");
+        for entry in &entries {
+            // Make path relative to store root
+            let relative_path = entry
+                .path()
+                .strip_prefix(store.root())
+                .unwrap_or(&entry.path())
+                .to_string_lossy()
+                .to_string();
+            debug!(path = %relative_path, "checking arxiv cache file");
+            let path = StatePath::new(&relative_path)?;
+            if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&path)? {
+                debug!(count = candidates.len(), "read candidates from cache file");
+                if !candidates.is_empty() {
+                    info!(
+                        count = candidates.len(),
+                        "loaded candidates from arxiv cache"
+                    );
+                    return Ok(candidates);
+                }
+            }
+        }
+    }
+
+    Ok(Vec::new())
 }
 
 fn load_cached_dedup(
     store: &FileStateStore,
-    source: Option<&RunManifest>,
+    date: &str,
     candidates: &[CandidatePaper],
     snapshot: &ZoteroSnapshot,
 ) -> anyhow::Result<DedupResult> {
     let _ = (store, snapshot);
-    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached dedup"))?;
-    warn!("loading cached dedup: re-running deduplicate with current data");
-    let kept = candidates.to_vec();
+
+    // Try to read from date directory
+    let dedup_path = StatePath::new(format!("dates/{}/dedup.json", date))?;
+    if let Some(dedup) = store.read_json::<DedupResult>(&dedup_path)? {
+        return Ok(dedup);
+    }
+
+    // Fallback: re-run dedup with current data
+    warn!("no cached dedup found, re-running deduplicate with current data");
     Ok(DedupResult {
-        run_id: source.run_id.clone(),
-        candidates: kept,
+        run_id: "local".to_string(),
+        candidates: candidates.to_vec(),
         duplicates: Vec::new(),
         skipped_existing: Vec::new(),
     })
@@ -1837,80 +2130,216 @@ fn load_cached_dedup(
 #[allow(clippy::type_complexity)]
 fn load_cached_embeddings(
     store: &FileStateStore,
-    source: Option<&RunManifest>,
+    date: &str,
     candidates: &[CandidatePaper],
-    snapshot: &ZoteroSnapshot,
+    _snapshot: &ZoteroSnapshot,
 ) -> anyhow::Result<(Vec<(String, Vec<f32>)>, Vec<(String, Vec<f32>, f32)>)> {
-    let _ = (store, source, candidates, snapshot);
-    anyhow::bail!("loading cached embeddings not yet supported; re-run with --stage embedding")
+    // Try to read embedding index from date directory
+    let index_path = StatePath::new(format!("dates/{}/embeddings.json", date))?;
+    if let Some(index) = store.read_json::<EmbeddingIndex>(&index_path)? {
+        // Validate that cached embeddings match current candidates
+        let current_ids: std::collections::HashSet<&str> =
+            candidates.iter().map(|c| c.paper_id.as_str()).collect();
+        let cached_ids: std::collections::HashSet<&str> = index
+            .candidate_hashes
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect();
+        if current_ids != cached_ids {
+            warn!(
+                current = current_ids.len(),
+                cached = cached_ids.len(),
+                "cached embeddings candidate set mismatch; consider re-running with --stage embedding"
+            );
+        }
+
+        // Load candidate embeddings from .vec files
+        let mut candidate_embs = Vec::new();
+        for (paper_id, input_hash) in &index.candidate_hashes {
+            let vec_path = StatePath::new(format!("cache/embeddings/{}.vec", input_hash))?;
+            if let Some(bytes) = store.read_bytes(&vec_path)? {
+                let vec = bytes_to_vec(&bytes);
+                candidate_embs.push((paper_id.clone(), vec));
+            } else {
+                anyhow::bail!("embedding .vec file not found: {}", input_hash);
+            }
+        }
+
+        // Load library embeddings from .vec files
+        let mut library_embs = Vec::new();
+        for (lib_id, weight, input_hash) in &index.library_hashes {
+            let vec_path = StatePath::new(format!("cache/embeddings/{}.vec", input_hash))?;
+            if let Some(bytes) = store.read_bytes(&vec_path)? {
+                let vec = bytes_to_vec(&bytes);
+                library_embs.push((lib_id.clone(), vec, *weight));
+            } else {
+                anyhow::bail!("embedding .vec file not found: {}", input_hash);
+            }
+        }
+
+        return Ok((candidate_embs, library_embs));
+    }
+
+    anyhow::bail!("no cached embeddings found for date {}", date)
 }
 
 fn load_cached_rerank(
     store: &FileStateStore,
+    date: &str,
     source: Option<&RunManifest>,
 ) -> anyhow::Result<(
     daily_paper_core::rerank::selection::ReadSelection,
     Vec<(String, f32)>,
 )> {
-    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached rerank"))?;
-    let sel_ref = source
-        .stages
-        .iter()
-        .find(|s| s.stage == StageName::Rerank)
-        .and_then(|s| s.output_ref.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("source run has no Rerank output"))?;
-    let path = StatePath::new(format!("cache/rerank/{}.json", sel_ref))?;
-    let sel: Option<daily_paper_core::rerank::selection::ReadSelection> = store.read_json(&path)?;
-    let selection = sel.ok_or_else(|| anyhow::anyhow!("cached rerank not found: {}", sel_ref))?;
-    Ok((selection, Vec::new()))
+    if let Some(selection_id) = stage_output_ref(source, StageName::Rerank) {
+        let path = StatePath::new(format!("cache/rerank/{}.json", selection_id))?;
+        if let Some(selection) =
+            store.read_json::<daily_paper_core::rerank::selection::ReadSelection>(&path)?
+        {
+            let scores = selection.paper_scores.clone();
+            return Ok((selection, scores));
+        }
+        anyhow::bail!("cached rerank not found: {}", selection_id);
+    }
+
+    // Try to read from date directory
+    let rerank_path = StatePath::new(format!("dates/{}/rerank.json", date))?;
+    if let Some(rerank) =
+        store.read_json::<daily_paper_core::rerank::selection::ReadSelection>(&rerank_path)?
+    {
+        let scores = rerank.paper_scores.clone();
+        return Ok((rerank, scores));
+    }
+
+    anyhow::bail!("no cached rerank found for date {}", date)
 }
 
 fn load_cached_read_results(
     store: &FileStateStore,
+    date: &str,
     source: Option<&RunManifest>,
 ) -> anyhow::Result<Vec<ReadResult>> {
-    let source = source.ok_or_else(|| anyhow::anyhow!("no source run for cached read results"))?;
-    let read_ref = source
-        .stages
-        .iter()
-        .find(|s| s.stage == StageName::DeepRead)
-        .and_then(|s| s.output_ref.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("source run has no DeepRead output"))?;
-    // output_ref for DeepRead is a comma-separated list of paper IDs
-    let paper_ids: Vec<&str> = read_ref.split(',').collect();
-    let mut results = Vec::new();
-    for pid in paper_ids {
-        let path = StatePath::new(format!("cache/papers/{}/read/{}.json", pid, pid))?;
-        if let Some(r) = store.read_json::<ReadResult>(&path)? {
-            results.push(r);
+    if let Some(read_ref) = stage_output_ref(source, StageName::DeepRead) {
+        let mut results = Vec::new();
+        for paper_id in read_ref.split(',').filter(|id| !id.is_empty()) {
+            let path = StatePath::new(format!("dates/{}/read/{}.json", date, paper_id))?;
+            if let Some(result) = store.read_json::<ReadResult>(&path)? {
+                results.push(result);
+            }
+        }
+        if !results.is_empty() {
+            return Ok(results);
         }
     }
-    Ok(results)
+
+    // Try to read from date directory
+    let read_dir = store.root().join(format!("dates/{}/read", date));
+    if read_dir.exists() {
+        let mut results = Vec::new();
+        for entry in std::fs::read_dir(&read_dir)?.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().map(|ext| ext == "json").unwrap_or(false) {
+                let relative_path = path
+                    .strip_prefix(store.root())
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                let state_path = StatePath::new(relative_path)?;
+                if let Some(r) = store.read_json::<ReadResult>(&state_path)? {
+                    results.push(r);
+                }
+            }
+        }
+        if !results.is_empty() {
+            return Ok(results);
+        }
+    }
+
+    // Fallback: find read results from papers cache
+    let papers_dir = store.root().join("cache/papers");
+    if papers_dir.exists() {
+        for entry in std::fs::read_dir(&papers_dir)?.filter_map(|e| e.ok()) {
+            let read_dir = entry.path().join("read");
+            if read_dir.exists() {
+                let mut entries: Vec<_> = std::fs::read_dir(&read_dir)?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .map(|ext| ext == "json")
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                entries.sort_by(|a, b| {
+                    b.metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                        .cmp(
+                            &a.metadata()
+                                .and_then(|m| m.modified())
+                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                        )
+                });
+                if let Some(entry) = entries.first() {
+                    let path = entry.path();
+                    let relative_path = path
+                        .strip_prefix(store.root())
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+                    let path = StatePath::new(relative_path)?;
+                    if let Some(r) = store.read_json::<ReadResult>(&path)? {
+                        return Ok(vec![r]);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Vec::new())
 }
 
 fn load_cached_render(
     store: &FileStateStore,
+    date: &str,
     source: Option<&RunManifest>,
-    run_id: &str,
 ) -> anyhow::Result<(String, Option<String>)> {
-    let _ = source;
-    // Check if this run already has a report
+    if let Some(source) = source {
+        let html_path = store
+            .root()
+            .join(format!("reports/{}/report.html", source.run_id));
+        if html_path.exists() {
+            let text_path = store
+                .root()
+                .join(format!("reports/{}/report.txt", source.run_id));
+            return Ok((
+                html_path.to_string_lossy().to_string(),
+                if text_path.exists() {
+                    Some(text_path.to_string_lossy().to_string())
+                } else {
+                    None
+                },
+            ));
+        }
+    }
+
+    // Try to read from date directory
     let html_path = store
         .root()
-        .join("reports")
-        .join(run_id)
-        .join("report.html");
+        .join(format!("dates/{}/report/report.html", date));
     if html_path.exists() {
-        let text_path = store.root().join("reports").join(run_id).join("report.txt");
-        Ok((
+        let text_path = store
+            .root()
+            .join(format!("dates/{}/report/report.txt", date));
+        return Ok((
             html_path.to_string_lossy().to_string(),
             if text_path.exists() {
                 Some(text_path.to_string_lossy().to_string())
             } else {
                 None
             },
-        ))
-    } else {
-        anyhow::bail!("no cached report found for run {}", run_id)
+        ));
     }
+
+    anyhow::bail!("no cached report found for date {}", date)
 }

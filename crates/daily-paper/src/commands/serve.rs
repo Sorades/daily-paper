@@ -44,7 +44,7 @@ const MAX_LOG_LINES: usize = 10_000;
 // ── API request/response types ───────────────────────────────────────
 
 #[derive(Deserialize)]
-struct PipelineRequest {
+struct RunRequest {
     stages: Option<Vec<String>>,
     from_run: Option<String>,
     date: Option<String>,
@@ -64,13 +64,13 @@ struct ApiMessage {
 }
 
 #[derive(Serialize)]
-struct PipelineStartResponse {
+struct RunStartResponse {
     run_id: String,
     message: String,
 }
 
 #[derive(Serialize)]
-struct CalendarDay {
+struct StatsDay {
     day: u32,
     total: usize,
     success: usize,
@@ -78,10 +78,10 @@ struct CalendarDay {
 }
 
 #[derive(Serialize)]
-struct CalendarResponse {
+struct StatsResponse {
     year: i32,
     month: u32,
-    days: Vec<CalendarDay>,
+    days: Vec<StatsDay>,
 }
 
 #[derive(Serialize)]
@@ -179,19 +179,14 @@ pub async fn execute(
         .join("ui");
 
     let app = Router::new()
-        // Pipeline
-        .route("/api/pipeline", axum::routing::post(api_pipeline_trigger))
-        .route(
-            "/api/pipeline/stream",
-            axum::routing::get(api_pipeline_stream),
-        )
-        // Calendar & runs
-        .route(
-            "/api/calendar/{year}/{month}",
-            axum::routing::get(api_calendar),
-        )
+        // Run
+        .route("/api/run", axum::routing::post(api_run_trigger))
+        .route("/api/run/stream", axum::routing::get(api_run_stream))
+        // Stats & date
+        .route("/api/stats/{year}/{month}", axum::routing::get(api_stats))
         .route("/api/date/{date}", axum::routing::get(api_date_detail))
         .route("/api/date/{date}", axum::routing::delete(api_date_delete))
+        // Run details
         .route("/api/run/{run_id}", axum::routing::get(api_run_detail))
         .route("/api/run/{run_id}", axum::routing::delete(api_run_delete))
         .route("/api/run/{run_id}/send", axum::routing::post(api_run_send))
@@ -228,12 +223,12 @@ pub async fn execute(
     Ok(())
 }
 
-// ── Pipeline handlers ────────────────────────────────────────────────
+// ── Run handlers ────────────────────────────────────────────────────
 
-async fn api_pipeline_trigger(
+async fn api_run_trigger(
     State(state): State<AppState>,
-    Json(req): Json<PipelineRequest>,
-) -> Result<Json<PipelineStartResponse>, (StatusCode, Json<ApiMessage>)> {
+    Json(req): Json<RunRequest>,
+) -> Result<Json<RunStartResponse>, (StatusCode, Json<ApiMessage>)> {
     if state.pipeline_running.load(Ordering::SeqCst) {
         return Err((
             StatusCode::CONFLICT,
@@ -387,13 +382,13 @@ async fn api_pipeline_trigger(
         running.store(false, Ordering::SeqCst);
     });
 
-    Ok(Json(PipelineStartResponse {
+    Ok(Json(RunStartResponse {
         run_id,
         message: "pipeline started".to_string(),
     }))
 }
 
-async fn api_pipeline_stream(
+async fn api_run_stream(
     State(state): State<AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
@@ -427,12 +422,12 @@ async fn api_pipeline_stream(
     Sse::new(stream)
 }
 
-// ── Calendar & run handlers ──────────────────────────────────────────
+// ── Stats & run handlers ─────────────────────────────────────────────
 
-async fn api_calendar(
+async fn api_stats(
     State(state): State<AppState>,
     AxumPath((year, month)): AxumPath<(i32, u32)>,
-) -> Json<CalendarResponse> {
+) -> Json<StatsResponse> {
     let runs = collect_runs(&state.store);
     let mut day_counts: std::collections::HashMap<u32, (usize, usize)> =
         std::collections::HashMap::new();
@@ -459,7 +454,7 @@ async fn api_calendar(
     let days = (1..=days_in_month)
         .map(|day| {
             let (total, success) = day_counts.get(&day).copied().unwrap_or((0, 0));
-            CalendarDay {
+            StatsDay {
                 day,
                 total,
                 success,
@@ -468,7 +463,7 @@ async fn api_calendar(
         })
         .collect();
 
-    Json(CalendarResponse { year, month, days })
+    Json(StatsResponse { year, month, days })
 }
 
 async fn api_date_detail(

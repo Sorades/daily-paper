@@ -5,6 +5,9 @@ use std::time::Duration;
 use crate::error::{Error, Result};
 use crate::models::pdf::PdfAsset;
 
+const USER_AGENT: &str =
+    "daily-paper/0.1 (https://github.com/user/daily-paper; mailto:user@example.com)";
+
 /// Download a PDF from the given URL and save it to the target path.
 ///
 /// Returns a PdfAsset with metadata about the downloaded file.
@@ -15,7 +18,11 @@ pub async fn download_pdf(
     timeout_secs: u64,
     max_mb: u64,
 ) -> Result<PdfAsset> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|e| Error::PdfDownload(format!("failed to build client: {}", e)))?;
+
     let resp = client
         .get(url)
         .timeout(Duration::from_secs(timeout_secs))

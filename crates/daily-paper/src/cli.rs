@@ -21,8 +21,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Initialize project directory with default config and templates
-    Init,
     /// Run the full pipeline
     Run(RunArgs),
     /// Show status of recent runs
