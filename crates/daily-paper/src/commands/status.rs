@@ -7,8 +7,8 @@ use crate::cli::StatusArgs;
 use daily_paper_core::models::run::{RunManifest, RunStatus, StageName, StageStatus};
 use daily_paper_core::state::store::FileStateStore;
 
-pub async fn execute(state_dir: &Path, args: StatusArgs) -> anyhow::Result<()> {
-    let store = FileStateStore::new(state_dir.to_path_buf());
+pub async fn execute(data_dir: &Path, args: StatusArgs) -> anyhow::Result<()> {
+    let store = FileStateStore::new(data_dir.to_path_buf());
 
     if let Some(run_id) = &args.run_id {
         show_run(&store, run_id)?;
@@ -20,7 +20,7 @@ pub async fn execute(state_dir: &Path, args: StatusArgs) -> anyhow::Result<()> {
 }
 
 fn show_latest_run(store: &FileStateStore) -> anyhow::Result<()> {
-    let runs_dir = store.root().join("runs");
+    let runs_dir = store.root().join("cache/runs");
     if !runs_dir.exists() {
         info!("no runs found");
         return Ok(());
@@ -53,7 +53,7 @@ fn show_latest_run(store: &FileStateStore) -> anyhow::Result<()> {
 }
 
 fn show_run(store: &FileStateStore, run_id: &str) -> anyhow::Result<()> {
-    let manifest_path = format!("runs/{}/manifest.json", run_id);
+    let manifest_path = format!("cache/runs/{}/manifest.json", run_id);
     let manifest: RunManifest = store
         .read_json(&daily_paper_core::state::path::StatePath::new(
             &manifest_path,

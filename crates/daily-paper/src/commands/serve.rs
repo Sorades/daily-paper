@@ -150,33 +150,28 @@ struct BulkDeleteResponse {
 
 // ── Entry point ──────────────────────────────────────────────────────
 
-pub async fn execute(
-    state_dir: &Path,
-    config_path: &Path,
-    config: ResolvedConfig,
-    args: ServeArgs,
-) -> anyhow::Result<()> {
-    let store = FileStateStore::new(state_dir.to_path_buf());
+pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
+    let config_path = data_dir.join("config.toml");
+    let (_raw, resolved) =
+        load_config(&config_path).map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
+
+    let store = FileStateStore::new(data_dir.to_path_buf());
     store.ensure_dirs()?;
 
-    let port = args.port.unwrap_or(config.web.port);
+    let port = args.port.unwrap_or(resolved.web.port);
     let (pipeline_tx, _) = broadcast::channel(256);
     let log_buffer: LogBuffer = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES)));
 
+    let ui_path = data_dir.join("ui");
+
     let state = AppState {
         store: Arc::new(store),
-        config_path: config_path.to_path_buf(),
-        config: Arc::new(RwLock::new(config)),
+        config_path: config_path.clone(),
+        config: Arc::new(RwLock::new(resolved)),
         pipeline_tx,
         log_buffer,
         pipeline_running: Arc::new(AtomicBool::new(false)),
     };
-
-    let ui_path = state_dir
-        .parent()
-        .unwrap_or(state_dir)
-        .join(".daily-paper")
-        .join("ui");
 
     let app = Router::new()
         // Run
@@ -209,7 +204,7 @@ pub async fn execute(
             axum::routing::get(|| async { Redirect::permanent("/ui/") }),
         )
         .nest_service("/ui", ServeDir::new(&ui_path))
-        .nest_service("/report", ServeDir::new(state_dir.join("reports")))
+        .nest_service("/report", ServeDir::new(data_dir.join("cache/reports")))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -248,14 +243,15 @@ async fn api_run_trigger(
 
     // Load source manifest if --from-run specified
     let source_manifest = if let Some(ref from_run) = req.from_run {
-        let path = StatePath::new(format!("runs/{}/manifest.json", from_run)).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ApiMessage {
-                    message: e.to_string(),
-                }),
-            )
-        })?;
+        let path =
+            StatePath::new(format!("cache/runs/{}/manifest.json", from_run)).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiMessage {
+                        message: e.to_string(),
+                    }),
+                )
+            })?;
         state.store.read_json::<RunManifest>(&path).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -309,14 +305,15 @@ async fn api_run_trigger(
         error: None,
     };
 
-    let manifest_path = StatePath::new(format!("runs/{}/manifest.json", run_id)).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                message: e.to_string(),
-            }),
-        )
-    })?;
+    let manifest_path =
+        StatePath::new(format!("cache/runs/{}/manifest.json", run_id)).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    message: e.to_string(),
+                }),
+            )
+        })?;
 
     state
         .store
@@ -478,7 +475,7 @@ async fn api_date_detail(
             let report_path = state
                 .store
                 .root()
-                .join("reports")
+                .join("cache/reports")
                 .join(&r.run_id)
                 .join("report.html");
             RunSummary {
@@ -505,7 +502,7 @@ async fn api_run_detail(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Result<Json<RunManifest>, StatusCode> {
-    let path = StatePath::new(format!("runs/{}/manifest.json", run_id))
+    let path = StatePath::new(format!("cache/runs/{}/manifest.json", run_id))
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     state
         .store
@@ -519,8 +516,8 @@ async fn api_run_delete(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Result<Json<ApiMessage>, StatusCode> {
-    let run_dir = state.store.root().join("runs").join(&run_id);
-    let report_dir = state.store.root().join("reports").join(&run_id);
+    let run_dir = state.store.root().join("cache/runs").join(&run_id);
+    let report_dir = state.store.root().join("cache/reports").join(&run_id);
     if run_dir.exists() {
         std::fs::remove_dir_all(&run_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
@@ -545,8 +542,8 @@ async fn api_date_delete(
 
     let count = to_delete.len();
     for run_id in &to_delete {
-        let run_dir = state.store.root().join("runs").join(run_id);
-        let report_dir = state.store.root().join("reports").join(run_id);
+        let run_dir = state.store.root().join("cache/runs").join(run_id);
+        let report_dir = state.store.root().join("cache/reports").join(run_id);
         let _ = std::fs::remove_dir_all(run_dir);
         let _ = std::fs::remove_dir_all(report_dir);
     }
@@ -563,8 +560,8 @@ async fn api_runs_bulk_delete(
 ) -> Result<Json<BulkDeleteResponse>, StatusCode> {
     let count = req.run_ids.len();
     for run_id in &req.run_ids {
-        let run_dir = state.store.root().join("runs").join(run_id);
-        let report_dir = state.store.root().join("reports").join(run_id);
+        let run_dir = state.store.root().join("cache/runs").join(run_id);
+        let report_dir = state.store.root().join("cache/reports").join(run_id);
         let _ = std::fs::remove_dir_all(run_dir);
         let _ = std::fs::remove_dir_all(report_dir);
     }
@@ -581,7 +578,7 @@ async fn api_run_send(
     let report_path = state
         .store
         .root()
-        .join("reports")
+        .join("cache/reports")
         .join(&run_id)
         .join("report.html");
     if !report_path.exists() {
@@ -749,7 +746,7 @@ async fn api_logs_stream(
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn collect_runs(store: &FileStateStore) -> Vec<RunManifest> {
-    let runs_dir = store.root().join("runs");
+    let runs_dir = store.root().join("cache/runs");
     if !runs_dir.exists() {
         return Vec::new();
     }
@@ -761,7 +758,7 @@ fn collect_runs(store: &FileStateStore) -> Vec<RunManifest> {
             if manifest_path.exists() {
                 if let Ok(Some(m)) = store.read_json::<RunManifest>(
                     &StatePath::new(format!(
-                        "runs/{}/manifest.json",
+                        "cache/runs/{}/manifest.json",
                         entry.file_name().to_string_lossy()
                     ))
                     .unwrap(),

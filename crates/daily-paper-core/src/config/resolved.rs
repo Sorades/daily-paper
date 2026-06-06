@@ -92,12 +92,6 @@ pub struct ResolvedWebConfig {
     pub ui_path: String,
 }
 
-fn resolve_env(var_name: &str) -> Result<String> {
-    std::env::var(var_name).map_err(|_| {
-        crate::error::Error::Config(format!("environment variable '{}' not set", var_name))
-    })
-}
-
 impl ResolvedConfig {
     pub fn from_raw(raw: &RawConfig) -> Result<Self> {
         // Validate required fields
@@ -106,7 +100,7 @@ impl ResolvedConfig {
         Ok(Self {
             zotero: ResolvedZoteroConfig {
                 user_id: raw.zotero.user_id.clone(),
-                api_key: resolve_env(&raw.zotero.api_key_env)?,
+                api_key: raw.zotero.api_key.clone(),
                 max_snapshot_age_hours: raw.zotero.max_snapshot_age_hours.unwrap_or(168),
                 filters: raw
                     .zotero
@@ -133,11 +127,7 @@ impl ResolvedConfig {
             embedding: ResolvedEmbeddingConfig {
                 kind: raw.embedding.kind.clone(),
                 base_url: raw.embedding.base_url.clone(),
-                api_key: raw
-                    .embedding
-                    .api_key_env
-                    .as_deref()
-                    .and_then(|env| std::env::var(env).ok()),
+                api_key: raw.embedding.api_key.clone(),
                 model: raw.embedding.model.clone().unwrap_or_else(|| {
                     if raw.embedding.kind == "fastembed" {
                         "BAAI/bge-small-en-v1.5".to_string()
@@ -157,7 +147,7 @@ impl ResolvedConfig {
             reader: ResolvedReaderConfig {
                 kind: raw.reader.kind.clone(),
                 base_url: raw.reader.base_url.clone(),
-                api_key: resolve_env(&raw.reader.api_key_env)?,
+                api_key: raw.reader.api_key.clone(),
                 model: raw.reader.model.clone(),
                 top_n: raw.reader.top_n.unwrap_or(10),
                 language: raw
@@ -187,7 +177,7 @@ impl ResolvedConfig {
                 smtp_port: raw.email.smtp_port,
                 sender: raw.email.sender.clone(),
                 receiver: raw.email.receiver.clone(),
-                password: resolve_env(&raw.email.password_env)?,
+                password: raw.email.password.clone(),
             },
             web: ResolvedWebConfig {
                 port: raw.web.as_ref().and_then(|w| w.port).unwrap_or(8991),
@@ -195,7 +185,7 @@ impl ResolvedConfig {
                     .web
                     .as_ref()
                     .and_then(|w| w.ui_path.clone())
-                    .unwrap_or_else(|| ".daily-paper/ui".to_string()),
+                    .unwrap_or_else(|| "ui".to_string()),
             },
         })
     }

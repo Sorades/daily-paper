@@ -454,10 +454,7 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                     }
                     _ if in_entry && !in_author => {
                         if let Some(ref mut entry) = current_entry {
-                            entry.insert(
-                                tag.into(),
-                                serde_json::Value::String(current_text.clone()),
-                            );
+                            entry.insert(tag, serde_json::Value::String(current_text.clone()));
                         }
                     }
                     _ => {}

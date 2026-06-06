@@ -1,65 +1,34 @@
+mod archive;
+mod cache;
+mod config;
 mod run;
 mod serve;
 mod status;
 
-use std::path::PathBuf;
-
 use crate::cli::{Cli, Commands};
-use daily_paper_core::config::{
-    default_config_path, default_state_dir, is_project_mode, load_config,
-};
+use daily_paper_core::config::default_data_dir;
 
 pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
-    // Serve command loads config for web settings
-    if let Commands::Serve(args) = &cli.command {
-        let config_path = cli
-            .config
-            .or_else(default_config_path)
-            .ok_or_else(|| anyhow::anyhow!("no config file found; specify with --config"))?;
-        let (_raw, resolved) = load_config(&config_path)
-            .map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
-        let state_dir = cli
-            .state_dir
-            .or_else(|| {
-                _raw.state
-                    .as_ref()
-                    .and_then(|s| s.dir.as_ref().map(PathBuf::from))
-            })
-            .unwrap_or_else(default_state_dir);
-        return serve::execute(&state_dir, &config_path, resolved, args.clone()).await;
-    }
-
-    let config_path = cli.config
-        .or_else(default_config_path)
-        .ok_or_else(|| {
-            if is_project_mode() {
-                anyhow::anyhow!(
-                    "config file not found in .daily-paper/config/; create config.toml manually or copy from config.example.toml"
-                )
-            } else {
-                anyhow::anyhow!(
-                    "no config file found; specify with --config or create .daily-paper/config/config.toml"
-                )
-            }
-        })?;
-
-    // Load config to check for [state].dir
-    let (raw, _resolved) =
-        load_config(&config_path).map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
-
-    let state_dir = cli
-        .state_dir
-        .or_else(|| {
-            raw.state
-                .as_ref()
-                .and_then(|s| s.dir.as_ref().map(PathBuf::from))
-        })
-        .unwrap_or_else(default_state_dir);
+    let data_dir = cli.directory.unwrap_or_else(default_data_dir);
 
     match cli.command {
-        Commands::Run(args) => run::execute(&config_path, &state_dir, args).await?,
-        Commands::Status(args) => status::execute(&state_dir, args).await?,
-        Commands::Serve(_) => unreachable!(),
+        Commands::Run(args) => run::execute(&data_dir, args).await?,
+        Commands::Status(args) => status::execute(&data_dir, args).await?,
+        Commands::Serve(args) => serve::execute(&data_dir, args).await?,
+        Commands::Config(cmd) => match cmd {
+            crate::cli::ConfigCommands::Show => config::show(&data_dir)?,
+            crate::cli::ConfigCommands::Path => config::path(&data_dir),
+            crate::cli::ConfigCommands::Init => config::init(&data_dir)?,
+        },
+        Commands::Cache(cmd) => match cmd {
+            crate::cli::CacheCommands::List => cache::list(&data_dir)?,
+            crate::cli::CacheCommands::Clean(args) => cache::clean(&data_dir, &args.kind)?,
+            crate::cli::CacheCommands::Size => cache::size(&data_dir)?,
+        },
+        Commands::Archive(cmd) => match cmd {
+            crate::cli::ArchiveCommands::List => archive::list(&data_dir)?,
+            crate::cli::ArchiveCommands::Show(args) => archive::show(&data_dir, &args.date)?,
+        },
     }
 
     Ok(())

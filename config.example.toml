@@ -1,22 +1,14 @@
 # Daily Paper 配置示例
 #
 # 默认配置文件位置：
-#   Linux:   ~/.config/daily-paper/config.toml
-#   macOS:   ~/Library/Application Support/daily-paper/config.toml
-#   Windows: %APPDATA%/daily-paper/config.toml
+#   Debug build:   ~/.config/daily-paper-dev/config.toml
+#   Release build: ~/.config/daily-paper/config.toml
 #
-# 可通过 --config <path> 覆盖
-
-[state]
-# 可选。不设置时使用系统 app data 目录。
-# dir = "/path/to/daily-paper-state"
-
-[state.lock]
-stale_after_minutes = 360
+# 可通过 --directory/-d 覆盖数据目录
 
 [zotero]
 user_id = "123456"
-api_key_env = "ZOTERO_API_KEY"
+api_key = "your-zotero-api-key"
 max_snapshot_age_hours = 168
 
 [[zotero.filters]]
@@ -29,19 +21,23 @@ exclude = true
 
 [[sources]]
 kind = "arxiv"
-# arXiv uses the category RSS feed by default: https://rss.arxiv.org/rss/<category>
 categories = ["cs.AI", "cs.CL", "cs.LG"]
 include_cross_list = false
 
 [embedding]
+# kind: "openai-compatible" 或 "fastembed"
 kind = "openai-compatible"
 base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
+api_key = "your-openai-api-key"
 model = "text-embedding-3-small"
 batch_size = 64
 timeout_secs = 60
 max_retries = 5
 max_concurrency = 4
+
+# Fastembed 本地嵌入 (kind = "fastembed" 时使用以下默认值):
+# model = "qwen3-embedding:0.6b"
+# batch_size = 64
 
 [reranker]
 kind = "embedding_similarity"
@@ -50,7 +46,7 @@ top_k_library_matches = 20
 [reader]
 kind = "openai-compatible"
 base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
+api_key = "your-openai-api-key"
 model = "gpt-4o-mini"
 top_n = 10
 language = "zh-CN"
@@ -72,8 +68,8 @@ smtp_server = "smtp.example.com"
 smtp_port = 465
 sender = "sender@example.com"
 receiver = "receiver@example.com"
-password_env = "SMTP_PASSWORD"
+password = "your-smtp-password"
 
 [web]
 port = 8991
-# ui_path = ".daily-paper/ui"
+# ui_path = "ui"

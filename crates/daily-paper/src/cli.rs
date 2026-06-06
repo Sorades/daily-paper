@@ -7,13 +7,9 @@ use clap::{Parser, Subcommand};
     about = "Daily paper recommendation and deep reading pipeline"
 )]
 pub struct Cli {
-    /// Path to config file
-    #[arg(long)]
-    pub config: Option<std::path::PathBuf>,
-
-    /// Override state directory
-    #[arg(long)]
-    pub state_dir: Option<std::path::PathBuf>,
+    /// Path to data directory (default: ~/.config/daily-paper or ~/.config/daily-paper-dev in dev mode)
+    #[arg(short, long)]
+    pub directory: Option<std::path::PathBuf>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -27,6 +23,56 @@ pub enum Commands {
     Status(StatusArgs),
     /// Serve reports as a web page
     Serve(ServeArgs),
+    /// Manage configuration
+    #[command(subcommand)]
+    Config(ConfigCommands),
+    /// Manage cache
+    #[command(subcommand)]
+    Cache(CacheCommands),
+    /// Manage archive
+    #[command(subcommand)]
+    Archive(ArchiveCommands),
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// Show current configuration
+    Show,
+    /// Show config file path
+    Path,
+    /// Initialize configuration file
+    Init,
+}
+
+#[derive(Subcommand)]
+pub enum CacheCommands {
+    /// List cache contents
+    List,
+    /// Clean cache
+    Clean(CacheCleanArgs),
+    /// Show cache size
+    Size,
+}
+
+#[derive(Parser)]
+pub struct CacheCleanArgs {
+    /// Cache type to clean (arxiv, embeddings, models, papers, rerank, zotero, all)
+    #[arg(long, default_value = "all")]
+    pub kind: String,
+}
+
+#[derive(Subcommand)]
+pub enum ArchiveCommands {
+    /// List all archive dates
+    List,
+    /// Show archive details for a specific date
+    Show(ArchiveShowArgs),
+}
+
+#[derive(Parser)]
+pub struct ArchiveShowArgs {
+    /// Date to show (YYYY-MM-DD)
+    pub date: String,
 }
 
 #[derive(Parser)]

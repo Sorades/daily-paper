@@ -51,14 +51,15 @@ struct EmbeddingIndex {
     library_hashes: Vec<(String, f32, String)>,
 }
 
-pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> anyhow::Result<()> {
-    let (_raw, resolved) = load_config(config_path)
+pub async fn execute(data_dir: &Path, args: RunArgs) -> anyhow::Result<()> {
+    let config_path = data_dir.join("config.toml");
+    let (_raw, resolved) = load_config(&config_path)
         .with_context(|| format!("failed to load config from {}", config_path.display()))?;
 
     info!(config = %config_path.display(), "config loaded");
-    info!(state_dir = %state_dir.display(), "state directory");
+    info!(data_dir = %data_dir.display(), "data directory");
 
-    let store = FileStateStore::new(state_dir.to_path_buf());
+    let store = FileStateStore::new(data_dir.to_path_buf());
     store.ensure_dirs()?;
 
     // Parse --stage filter
@@ -118,7 +119,7 @@ pub async fn execute(config_path: &Path, state_dir: &Path, args: RunArgs) -> any
         error: None,
     };
 
-    let manifest_path = StatePath::new(format!("runs/{}/manifest.json", run_id))?;
+    let manifest_path = StatePath::new(format!("cache/runs/{}/manifest.json", run_id))?;
     store.write_json(&manifest_path, &manifest)?;
 
     let _lock = store
@@ -538,7 +539,7 @@ async fn stage_zotero_sync(
     store.write_json(&snap_path, &snapshot)?;
 
     // Write snapshot ID to date directory
-    let snapshot_id_path = StatePath::new(format!("dates/{}/snapshot_id.txt", date))?;
+    let snapshot_id_path = StatePath::new(format!("archive/{}/snapshot_id.txt", date))?;
     store.write_string(&snapshot_id_path, &snapshot_id)?;
 
     // Update sync state
@@ -641,7 +642,7 @@ async fn stage_source_fetch(
     store.write_json(&cache_path, &all_candidates)?;
 
     // Write candidates to date directory
-    let candidates_date_path = StatePath::new(format!("dates/{}/candidates.json", date))?;
+    let candidates_date_path = StatePath::new(format!("archive/{}/candidates.json", date))?;
     store.write_json(&candidates_date_path, &all_candidates)?;
 
     record.status = StageStatus::Succeeded;
@@ -790,7 +791,7 @@ async fn stage_deduplicate(
     );
 
     // Write dedup result to date directory
-    let dedup_path = StatePath::new(format!("dates/{}/dedup.json", date))?;
+    let dedup_path = StatePath::new(format!("archive/{}/dedup.json", date))?;
     store.write_json(&dedup_path, &dedup)?;
 
     record.status = StageStatus::Succeeded;
@@ -1035,7 +1036,7 @@ async fn stage_embedding(
         candidate_hashes,
         library_hashes,
     };
-    let index_date_path = StatePath::new(format!("dates/{}/embeddings.json", date))?;
+    let index_date_path = StatePath::new(format!("archive/{}/embeddings.json", date))?;
     store.write_json(&index_date_path, &index)?;
 
     record.status = StageStatus::Succeeded;
@@ -1120,7 +1121,7 @@ async fn stage_rerank(
     store.write_json(&sel_path, &selection)?;
 
     // Write rerank result to date directory
-    let rerank_date_path = StatePath::new(format!("dates/{}/rerank.json", date))?;
+    let rerank_date_path = StatePath::new(format!("archive/{}/rerank.json", date))?;
     store.write_json(&rerank_date_path, &selection)?;
 
     record.status = StageStatus::Succeeded;
@@ -1361,7 +1362,7 @@ async fn stage_deep_read(
         store.write_json(&read_result_path, &read_result)?;
 
         // Write read result to date directory
-        let read_date_path = StatePath::new(format!("dates/{}/read/{}.json", date, paper_id))?;
+        let read_date_path = StatePath::new(format!("archive/{}/read/{}.json", date, paper_id))?;
         store.write_json(&read_date_path, &read_result)?;
 
         read_results.push(read_result);
@@ -1459,8 +1460,8 @@ async fn stage_render(
     let text_body = render_text(&title, &report_papers, run_id);
 
     // Write report files
-    let html_path = format!("reports/{}/report.html", run_id);
-    let text_path = format!("reports/{}/report.txt", run_id);
+    let html_path = format!("cache/reports/{}/report.html", run_id);
+    let text_path = format!("cache/reports/{}/report.txt", run_id);
 
     store.write_string(&StatePath::new(&html_path)?, &html_body)?;
     store.write_string(&StatePath::new(&text_path)?, &text_body)?;
@@ -1485,7 +1486,7 @@ async fn stage_render(
             .collect(),
     };
 
-    let report_meta_path = StatePath::new(format!("reports/{}/report.json", run_id))?;
+    let report_meta_path = StatePath::new(format!("cache/reports/{}/report.json", run_id))?;
     store.write_json(&report_meta_path, &rendered)?;
 
     let report_index = ReportIndex {
@@ -1501,7 +1502,7 @@ async fn stage_render(
         generated_at,
         report_hash,
     };
-    let report_index_path = StatePath::new(format!("dates/{}/report.json", input.date))?;
+    let report_index_path = StatePath::new(format!("archive/{}/report.json", input.date))?;
     store.write_json(&report_index_path, &report_index)?;
 
     info!(
@@ -1542,7 +1543,7 @@ async fn stage_send(
     };
 
     // Read the report metadata to get report_hash
-    let report_meta_path = StatePath::new(format!("reports/{}/report.json", run_id))?;
+    let report_meta_path = StatePath::new(format!("cache/reports/{}/report.json", run_id))?;
     let rendered: RenderedReport = store
         .read_json(&report_meta_path)?
         .context("report metadata not found")?;
@@ -1566,7 +1567,7 @@ async fn stage_send(
 
     // Check if already sent
     if !force {
-        let receipt_path = StatePath::new(format!("deliveries/{}.json", delivery_key))?;
+        let receipt_path = StatePath::new(format!("cache/deliveries/{}.json", delivery_key))?;
         if store.exists(&receipt_path)? {
             info!("report already sent, skipping (use --force-send to override)");
             record.status = StageStatus::Succeeded;
@@ -1937,7 +1938,7 @@ fn find_source_run(
         return Ok(id.to_string());
     }
     // Find latest run with a manifest that has stages
-    let runs_dir = store.root().join("runs");
+    let runs_dir = store.root().join("cache/runs");
     if !runs_dir.exists() {
         anyhow::bail!("no runs found");
     }
@@ -1959,7 +1960,7 @@ fn find_source_run(
     // Find the first entry with stages that has the required stages
     for entry in &entries {
         let manifest_path = StatePath::new(format!(
-            "runs/{}/manifest.json",
+            "cache/runs/{}/manifest.json",
             entry.file_name().to_string_lossy()
         ))?;
         if let Ok(Some(manifest)) = store.read_json::<RunManifest>(&manifest_path) {
@@ -2006,7 +2007,7 @@ fn load_cached_snapshot(
     }
 
     // Try to read snapshot ID from date directory
-    let snapshot_id_path = StatePath::new(format!("dates/{}/snapshot_id.txt", date))?;
+    let snapshot_id_path = StatePath::new(format!("archive/{}/snapshot_id.txt", date))?;
     if let Some(snapshot_id) = store.read_string(&snapshot_id_path)? {
         let snap_path = StatePath::new(format!("cache/zotero/snapshots/{}.json", snapshot_id))?;
         if let Some(snapshot) = store.read_json::<ZoteroSnapshot>(&snap_path)? {
@@ -2065,7 +2066,7 @@ fn load_cached_candidates(
     }
 
     // Try to read from date directory
-    let candidates_path = StatePath::new(format!("dates/{}/candidates.json", date))?;
+    let candidates_path = StatePath::new(format!("archive/{}/candidates.json", date))?;
     if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&candidates_path)? {
         if !candidates.is_empty() {
             info!(
@@ -2134,7 +2135,7 @@ fn load_cached_dedup(
     let _ = (store, snapshot);
 
     // Try to read from date directory
-    let dedup_path = StatePath::new(format!("dates/{}/dedup.json", date))?;
+    let dedup_path = StatePath::new(format!("archive/{}/dedup.json", date))?;
     if let Some(dedup) = store.read_json::<DedupResult>(&dedup_path)? {
         return Ok(dedup);
     }
@@ -2157,7 +2158,7 @@ fn load_cached_embeddings(
     _snapshot: &ZoteroSnapshot,
 ) -> anyhow::Result<(Vec<(String, Vec<f32>)>, Vec<(String, Vec<f32>, f32)>)> {
     // Try to read embedding index from date directory
-    let index_path = StatePath::new(format!("dates/{}/embeddings.json", date))?;
+    let index_path = StatePath::new(format!("archive/{}/embeddings.json", date))?;
     if let Some(index) = store.read_json::<EmbeddingIndex>(&index_path)? {
         // Validate that cached embeddings match current candidates
         let current_ids: std::collections::HashSet<&str> =
@@ -2225,7 +2226,7 @@ fn load_cached_rerank(
     }
 
     // Try to read from date directory
-    let rerank_path = StatePath::new(format!("dates/{}/rerank.json", date))?;
+    let rerank_path = StatePath::new(format!("archive/{}/rerank.json", date))?;
     if let Some(rerank) =
         store.read_json::<daily_paper_core::rerank::selection::ReadSelection>(&rerank_path)?
     {
@@ -2244,7 +2245,7 @@ fn load_cached_read_results(
     if let Some(read_ref) = stage_output_ref(source, StageName::DeepRead) {
         let mut results = Vec::new();
         for paper_id in read_ref.split(',').filter(|id| !id.is_empty()) {
-            let path = StatePath::new(format!("dates/{}/read/{}.json", date, paper_id))?;
+            let path = StatePath::new(format!("archive/{}/read/{}.json", date, paper_id))?;
             if let Some(result) = store.read_json::<ReadResult>(&path)? {
                 results.push(result);
             }
@@ -2255,7 +2256,7 @@ fn load_cached_read_results(
     }
 
     // Try to read from date directory
-    let read_dir = store.root().join(format!("dates/{}/read", date));
+    let read_dir = store.root().join(format!("archive/{}/read", date));
     if read_dir.exists() {
         let mut results = Vec::new();
         for entry in std::fs::read_dir(&read_dir)?.filter_map(|e| e.ok()) {
@@ -2329,11 +2330,11 @@ fn load_cached_render(
     if let Some(source) = source {
         let html_path = store
             .root()
-            .join(format!("reports/{}/report.html", source.run_id));
+            .join(format!("cache/reports/{}/report.html", source.run_id));
         if html_path.exists() {
             let text_path = store
                 .root()
-                .join(format!("reports/{}/report.txt", source.run_id));
+                .join(format!("cache/reports/{}/report.txt", source.run_id));
             return Ok((
                 html_path.to_string_lossy().to_string(),
                 if text_path.exists() {
@@ -2345,7 +2346,7 @@ fn load_cached_render(
         }
     }
 
-    let report_index_path = StatePath::new(format!("dates/{}/report.json", date))?;
+    let report_index_path = StatePath::new(format!("archive/{}/report.json", date))?;
     if let Some(index) = store.read_json::<ReportIndex>(&report_index_path)? {
         return Ok((index.html_path, index.text_path));
     }

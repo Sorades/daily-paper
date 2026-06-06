@@ -25,16 +25,17 @@ impl FileStateStore {
     /// Ensure the root and standard subdirectories exist.
     pub fn ensure_dirs(&self) -> Result<()> {
         for subdir in &[
-            "runs",
             "cache/arxiv",
             "cache/zotero/snapshots",
             "cache/embeddings",
             "cache/models",
             "cache/rerank",
             "cache/papers",
-            "dates",
-            "reports",
-            "deliveries/history",
+            "cache/deliveries/history",
+            "cache/reports",
+            "cache/runs",
+            "archive",
+            "templates",
         ] {
             let dir = self.root.join(subdir);
             std::fs::create_dir_all(&dir)?;
@@ -42,9 +43,9 @@ impl FileStateStore {
         Ok(())
     }
 
-    /// Ensure a date-specific directory exists with all stage subdirectories.
+    /// Ensure a date-specific archive directory exists with all stage subdirectories.
     pub fn ensure_date_dir(&self, date: &str) -> Result<()> {
-        let date_dir = self.root.join("dates").join(date);
+        let date_dir = self.root.join("archive").join(date);
         for subdir in &["", "read", "report"] {
             let dir = date_dir.join(subdir);
             std::fs::create_dir_all(&dir)?;
@@ -54,7 +55,7 @@ impl FileStateStore {
 
     /// Get the path to a date directory.
     pub fn date_dir(&self, date: &str) -> PathBuf {
-        self.root.join("dates").join(date)
+        self.root.join("archive").join(date)
     }
 
     /// Acquire a run lock.
@@ -194,8 +195,9 @@ mod tests {
         let (_dir, store) = make_store();
         store.ensure_dirs().unwrap();
 
-        assert!(store.root().join("runs").is_dir());
+        assert!(store.root().join("cache/runs").is_dir());
         assert!(store.root().join("cache/embeddings").is_dir());
-        assert!(store.root().join("reports").is_dir());
+        assert!(store.root().join("cache/reports").is_dir());
+        assert!(store.root().join("archive").is_dir());
     }
 }
