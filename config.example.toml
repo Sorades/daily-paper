@@ -56,6 +56,7 @@ timeout_secs = 120
 max_retries = 5
 max_concurrency = 2
 max_input_tokens = 60000
+# on_read_failure = "retry"  # 失败时重试，可选 "block"（跳过继续）
 
 [pdf]
 extractor = "pdftotext"

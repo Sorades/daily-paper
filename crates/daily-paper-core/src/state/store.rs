@@ -4,6 +4,46 @@ use super::path::StatePath;
 use crate::error::Result;
 use std::path::{Path, PathBuf};
 
+/// Cache kind definition: (kind name, subdirectory path, description).
+pub const CACHE_KINDS: &[(&str, &str, &str)] = &[
+    ("arxiv", "cache/arxiv", "ArXiv candidate lists"),
+    ("embeddings", "cache/embeddings", "Embedding vectors"),
+    ("models", "cache/models", "Fastembed model files"),
+    (
+        "papers",
+        "cache/papers",
+        "Paper cache (PDFs, text, read results)",
+    ),
+    ("rerank", "cache/rerank", "Rerank selections"),
+    (
+        "zotero",
+        "cache/zotero/snapshots",
+        "Zotero sync state and snapshots",
+    ),
+    (
+        "deliveries",
+        "cache/deliveries/history",
+        "Delivery receipts",
+    ),
+    ("reports", "cache/reports", "Generated reports"),
+    ("runs", "cache/runs", "Run manifests"),
+];
+
+/// All directories the store needs (cache kinds + non-cache dirs).
+const ALL_DIRS: &[&str] = &[
+    "cache/arxiv",
+    "cache/zotero/snapshots",
+    "cache/embeddings",
+    "cache/models",
+    "cache/rerank",
+    "cache/papers",
+    "cache/deliveries/history",
+    "cache/reports",
+    "cache/runs",
+    "archive",
+    "templates",
+];
+
 /// File-system based state store.
 ///
 /// All file access goes through `StatePath` to prevent path traversal.
@@ -24,19 +64,7 @@ impl FileStateStore {
 
     /// Ensure the root and standard subdirectories exist.
     pub fn ensure_dirs(&self) -> Result<()> {
-        for subdir in &[
-            "cache/arxiv",
-            "cache/zotero/snapshots",
-            "cache/embeddings",
-            "cache/models",
-            "cache/rerank",
-            "cache/papers",
-            "cache/deliveries/history",
-            "cache/reports",
-            "cache/runs",
-            "archive",
-            "templates",
-        ] {
+        for subdir in ALL_DIRS {
             let dir = self.root.join(subdir);
             std::fs::create_dir_all(&dir)?;
         }

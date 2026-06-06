@@ -588,6 +588,7 @@ dependencies = [
  "fastrand",
  "futures-util",
  "hex",
+ "indicatif",
  "serde",
  "serde_json",
  "sha2",

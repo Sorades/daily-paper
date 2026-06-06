@@ -56,7 +56,7 @@ pub enum CacheCommands {
 
 #[derive(Parser)]
 pub struct CacheCleanArgs {
-    /// Cache type to clean (arxiv, embeddings, models, papers, rerank, zotero, all)
+    /// Cache type to clean (arxiv, embeddings, models, papers, rerank, zotero, deliveries, reports, runs, all)
     #[arg(long, default_value = "all")]
     pub kind: String,
 }

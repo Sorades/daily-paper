@@ -25,3 +25,4 @@ futures-util = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 async-stream = "0.3"
+indicatif = { workspace = true }

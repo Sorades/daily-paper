@@ -218,6 +218,13 @@ pub enum PipelineEvent {
         cache_hit: bool,
         duration_ms: u64,
     },
+    Progress {
+        run_id: String,
+        stage: StageName,
+        current: usize,
+        total: usize,
+        message: String,
+    },
     Ended {
         run_id: String,
         status: RunStatus,

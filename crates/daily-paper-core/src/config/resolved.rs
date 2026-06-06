@@ -160,7 +160,7 @@ impl ResolvedConfig {
                     .reader
                     .on_read_failure
                     .clone()
-                    .unwrap_or_else(|| "block".into()),
+                    .unwrap_or_else(|| "retry".into()),
                 timeout_secs: raw.reader.timeout_secs.unwrap_or(120),
                 max_retries: raw.reader.max_retries.unwrap_or(5),
                 max_concurrency: raw.reader.max_concurrency.unwrap_or(2),

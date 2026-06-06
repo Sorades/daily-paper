@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use daily_paper_core::state::store::CACHE_KINDS;
 
 /// List cache contents.
 pub fn list(data_dir: &Path) -> Result<()> {
@@ -10,24 +11,12 @@ pub fn list(data_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let entries = vec![
-        ("arxiv", "ArXiv candidate lists"),
-        ("embeddings", "Embedding vectors"),
-        ("models", "Fastembed model files"),
-        ("papers", "Paper cache (PDFs, text, read results)"),
-        ("rerank", "Rerank selections"),
-        ("zotero", "Zotero sync state and snapshots"),
-        ("deliveries", "Delivery receipts"),
-        ("reports", "Generated reports"),
-        ("runs", "Run manifests"),
-    ];
-
     println!("Cache directory: {}\n", cache_dir.display());
     println!("{:<15} {:<10} {:<30}", "Type", "Files", "Description");
     println!("{}", "-".repeat(55));
 
-    for (name, desc) in entries {
-        let dir = cache_dir.join(name);
+    for &(name, subdir, desc) in CACHE_KINDS {
+        let dir = data_dir.join(subdir);
         if dir.exists() {
             let count = count_files(&dir)?;
             let size = dir_size(&dir)?;
@@ -53,40 +42,31 @@ pub fn clean(data_dir: &Path, kind: &str) -> Result<()> {
         return Ok(());
     }
 
-    let valid_kinds = [
-        "arxiv",
-        "embeddings",
-        "models",
-        "papers",
-        "rerank",
-        "zotero",
-        "deliveries",
-        "reports",
-        "runs",
-        "all",
-    ];
-
-    if !valid_kinds.contains(&kind) {
-        anyhow::bail!(
-            "invalid cache kind '{}'; valid kinds: {}",
-            kind,
-            valid_kinds.join(", ")
-        );
+    if kind == "all" {
+        for &(name, subdir, _) in CACHE_KINDS {
+            clean_single(data_dir, subdir, name)?;
+        }
+        return Ok(());
     }
 
-    if kind == "all" {
-        for k in &valid_kinds[..valid_kinds.len() - 1] {
-            clean_single(&cache_dir, k)?;
+    let entry = CACHE_KINDS.iter().find(|&&(name, _, _)| name == kind);
+    match entry {
+        Some(&(_, subdir, _)) => clean_single(data_dir, subdir, kind)?,
+        None => {
+            let valid: Vec<&str> = CACHE_KINDS.iter().map(|&(name, _, _)| name).collect();
+            anyhow::bail!(
+                "invalid cache kind '{}'; valid kinds: {}",
+                kind,
+                valid.join(", ")
+            );
         }
-    } else {
-        clean_single(&cache_dir, kind)?;
     }
 
     Ok(())
 }
 
-fn clean_single(cache_dir: &Path, kind: &str) -> Result<()> {
-    let dir = cache_dir.join(kind);
+fn clean_single(data_dir: &Path, subdir: &str, kind: &str) -> Result<()> {
+    let dir = data_dir.join(subdir);
     if !dir.exists() {
         println!("Cache '{}' does not exist, skipping", kind);
         return Ok(());

@@ -400,6 +400,7 @@ async fn api_run_stream(
                         PipelineEvent::Started { run_id }
                         | PipelineEvent::StageStart { run_id, .. }
                         | PipelineEvent::StageEnd { run_id, .. }
+                        | PipelineEvent::Progress { run_id, .. }
                         | PipelineEvent::Ended { run_id, .. } => {
                             filter_run.as_ref().is_none_or(|f| f == run_id)
                         }

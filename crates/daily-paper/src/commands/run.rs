@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::cli::RunArgs;
+use crate::progress::StageProgress;
 use daily_paper_core::config::load_config;
 use daily_paper_core::config::ResolvedConfig;
 use daily_paper_core::embedding::openai::EmbeddingClient;
@@ -16,7 +17,7 @@ use daily_paper_core::models::common::{sha256_hex, DateWindow};
 use daily_paper_core::models::dedup::{DedupResult, DuplicateReason, ExistingLibraryMatch};
 use daily_paper_core::models::interest::{InterestPaperRef, InterestProfile};
 use daily_paper_core::models::read::{compute_read_cache_key, PaperMetadataSummary, ReadResult};
-use daily_paper_core::models::report::{compute_delivery_key, RenderedReport, ReportIndex};
+use daily_paper_core::models::report::{compute_delivery_key, RenderedReport};
 use daily_paper_core::models::run::*;
 use daily_paper_core::models::zotero::ZoteroSnapshot;
 use daily_paper_core::pdf::download::download_pdf;
@@ -275,7 +276,17 @@ pub async fn run_pipeline(
     // Stage 4: Embedding
     let (candidate_embs, library_embs) = if should_run(&StageName::Embedding) {
         emit_event(event_tx, run_id, StageName::Embedding, true);
-        let r = stage_embedding(store, config, manifest, &dedup.candidates, &snapshot, date).await;
+        let r = stage_embedding(
+            store,
+            config,
+            manifest,
+            &dedup.candidates,
+            &snapshot,
+            date,
+            event_tx,
+            run_id,
+        )
+        .await;
         emit_stage_end(event_tx, manifest, run_id, StageName::Embedding, &r);
         let _ = store.write_json(manifest_path, manifest);
         completed_stages.push(StageName::Embedding);
@@ -334,6 +345,8 @@ pub async fn run_pipeline(
             &dedup.candidates,
             args.force_read,
             date,
+            event_tx,
+            run_id,
         )
         .await;
         emit_stage_end(event_tx, manifest, run_id, StageName::DeepRead, &r);
@@ -801,6 +814,7 @@ async fn stage_deduplicate(
     Ok(dedup)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stage_embedding(
     store: &FileStateStore,
     config: &ResolvedConfig,
@@ -808,6 +822,8 @@ async fn stage_embedding(
     candidates: &[CandidatePaper],
     snapshot: &ZoteroSnapshot,
     date: &str,
+    event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
+    run_id: &str,
 ) -> anyhow::Result<(Vec<(String, Vec<f32>)>, Vec<(String, Vec<f32>, f32)>)> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -824,6 +840,9 @@ async fn stage_embedding(
     let is_local = config.embedding.kind == "fastembed";
     let provider_id = if is_local { "fastembed" } else { "openai" };
     let config_hash = sha256_hex(config.embedding.model.as_bytes());
+
+    let progress = StageProgress::new(StageName::Embedding, 0, event_tx, run_id);
+    progress.inc("checking cache");
 
     // Collect all texts that need embedding (candidates + library)
     let mut all_texts: Vec<String> = Vec::new();
@@ -855,6 +874,7 @@ async fn stage_embedding(
     // Embed all texts at once using local model
     let all_embeddings = if is_local && !all_texts.is_empty() {
         info!(count = all_texts.len(), "embedding with local model");
+        progress.inc(&format!("embedding {} texts (local)", all_texts.len()));
         let model_name = config.embedding.model.clone();
         let batch_size = config.embedding.batch_size;
         let cache_dir = store.root().join("cache").to_path_buf();
@@ -872,6 +892,7 @@ async fn stage_embedding(
         )
     } else if !is_local && !all_texts.is_empty() {
         info!(count = all_texts.len(), "embedding with remote API");
+        progress.inc(&format!("embedding {} texts (remote)", all_texts.len()));
         let client = EmbeddingClient::new(
             config.embedding.base_url.clone().unwrap_or_default(),
             config.embedding.api_key.clone().unwrap_or_default(),
@@ -979,6 +1000,10 @@ async fn stage_embedding(
             count = uncached_library.len(),
             "embedding uncached library papers"
         );
+        progress.inc(&format!(
+            "embedding {} library papers",
+            uncached_library.len()
+        ));
         let texts: Vec<String> = uncached_library
             .iter()
             .map(|(_, _, t, _)| t.clone())
@@ -1030,6 +1055,11 @@ async fn stage_embedding(
         library = library_embs.len(),
         "embedding complete"
     );
+    progress.finish(&format!(
+        "{} candidates, {} library",
+        candidate_embs.len(),
+        library_embs.len()
+    ));
 
     // Write embedding index to date directory (only hashes, not full vectors)
     let index = EmbeddingIndex {
@@ -1132,6 +1162,7 @@ async fn stage_rerank(
     Ok((selection, scores))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stage_deep_read(
     store: &FileStateStore,
     config: &ResolvedConfig,
@@ -1140,6 +1171,8 @@ async fn stage_deep_read(
     candidates: &[CandidatePaper],
     force_read: bool,
     date: &str,
+    event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
+    run_id: &str,
 ) -> anyhow::Result<Vec<ReadResult>> {
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -1170,6 +1203,14 @@ async fn stage_deep_read(
     let paper_dir = store.root().join("cache/papers");
     std::fs::create_dir_all(&paper_dir)?;
 
+    let progress = StageProgress::new(StageName::DeepRead, selected_ids.len(), event_tx, run_id);
+
+    let max_attempts = if config.reader.on_read_failure == "retry" {
+        3
+    } else {
+        1
+    };
+
     for paper_id in selected_ids {
         let candidate = match candidates.iter().find(|c| &c.paper_id == paper_id) {
             Some(c) => c,
@@ -1180,9 +1221,7 @@ async fn stage_deep_read(
             }
         };
 
-        info!(paper_id = %paper_id, title = %candidate.title, "deep reading");
-
-        // Check read result cache
+        // Check read result cache (not retried)
         let pdf_dir = paper_dir.join(paper_id);
         let read_cache_path = find_cached_read_result(
             store,
@@ -1196,13 +1235,14 @@ async fn stage_deep_read(
             if let Some(ref path) = read_cache_path {
                 if let Some(result) = store.read_json::<ReadResult>(&StatePath::new(path)?)? {
                     info!(paper_id = %paper_id, "using cached read result");
+                    progress.inc(&format!("{} (cached)", paper_id));
                     read_results.push(result);
                     continue;
                 }
             }
         }
 
-        // Download PDF
+        // Check for PDF URL (permanent failure, not retried)
         let pdf_url = match candidate.pdf_url.as_deref() {
             Some(url) => url,
             None => {
@@ -1212,160 +1252,194 @@ async fn stage_deep_read(
             }
         };
 
-        let pdf_asset = match download_pdf(
-            paper_id,
-            pdf_url,
-            &pdf_dir,
-            config.pdf.timeout_secs,
-            config.pdf.max_pdf_mb,
-        )
-        .await
-        {
-            Ok(a) => a,
-            Err(e) => {
-                warn!(paper_id = %paper_id, error = %e, "PDF download failed");
-                mark_stage_blocked(
-                    manifest,
-                    &format!("PDF download failed for {}: {}", paper_id, e),
+        // Retry loop for transient operations
+        let mut result: Option<ReadResult> = None;
+        for attempt in 1..=max_attempts {
+            if attempt > 1 {
+                warn!(
+                    paper_id = %paper_id,
+                    attempt,
+                    max = max_attempts,
+                    "retrying paper"
                 );
-                any_failure = true;
-                continue;
+                progress.inc(&format!(
+                    "{} (retry {}/{})",
+                    paper_id, attempt, max_attempts
+                ));
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            } else {
+                info!(paper_id = %paper_id, title = %candidate.title, "deep reading");
+                progress.inc(&format!("{} - {}", paper_id, &candidate.title));
             }
-        };
 
-        // Extract text
-        let extracted = match extract_text(
-            paper_id,
-            Path::new(&pdf_asset.file_path),
-            &pdf_asset.sha256,
-            &pdf_dir,
-            config.pdf.timeout_secs,
-            config.pdf.max_text_chars,
-        )
-        .await
-        {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(paper_id = %paper_id, error = %e, "PDF extract failed");
-                mark_stage_blocked(
-                    manifest,
-                    &format!("PDF extract failed for {}: {}", paper_id, e),
-                );
-                any_failure = true;
-                continue;
-            }
-        };
-
-        // Fetch metadata
-        let metadata = extract_from_source(paper_id, &candidate.source_metadata);
-
-        // Build prompt
-        let full_text =
-            std::fs::read_to_string(Path::new(&extracted.text_path)).unwrap_or_default();
-        let sections = parse_sections(&full_text);
-        let selected_text = select_sections_for_reading(
-            &full_text,
-            &sections,
-            config.reader.max_input_tokens * 3, // rough char estimate
-        );
-
-        let authors_str = candidate
-            .authors
-            .iter()
-            .map(|a| a.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let user_prompt = build_user_prompt(
-            &candidate.title,
-            &candidate.abstract_text,
-            &authors_str,
-            &selected_text,
-            &config.reader.language,
-        );
-        let system_prompt = build_system_prompt(None);
-
-        let trimmed_prompt = trim_to_token_budget(&user_prompt, config.reader.max_input_tokens * 4);
-
-        // Call LLM
-        let (raw_response, token_usage) =
-            match reader.complete(&system_prompt, &trimmed_prompt).await {
-                Ok(r) => r,
+            // Download PDF
+            let pdf_asset = match download_pdf(
+                paper_id,
+                pdf_url,
+                &pdf_dir,
+                config.pdf.timeout_secs,
+                config.pdf.max_pdf_mb,
+            )
+            .await
+            {
+                Ok(a) => a,
                 Err(e) => {
-                    warn!(paper_id = %paper_id, error = %e, "LLM read failed");
-                    mark_stage_blocked(
-                        manifest,
-                        &format!("LLM read failed for {}: {}", paper_id, e),
-                    );
-                    any_failure = true;
+                    warn!(paper_id = %paper_id, attempt, error = %e, "PDF download failed");
+                    if attempt == max_attempts {
+                        mark_stage_blocked(
+                            manifest,
+                            &format!("PDF download failed for {}: {}", paper_id, e),
+                        );
+                    }
                     continue;
                 }
             };
 
-        // Parse LLM output (JSON with structured summary and affiliations)
-        let parsed = daily_paper_core::reader::template::parse_llm_output(&raw_response);
-        let summary = parsed
-            .as_ref()
-            .map(|p| p.summary.clone())
-            .unwrap_or_else(|| raw_response.clone());
-        let author_affiliations = parsed
-            .as_ref()
-            .map(|p| {
-                p.author_affiliations
-                    .iter()
-                    .map(|aa| daily_paper_core::models::read::AuthorAffiliation {
-                        name: aa.name.clone(),
-                        affiliation: aa.affiliation.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+            // Extract text
+            let extracted = match extract_text(
+                paper_id,
+                Path::new(&pdf_asset.file_path),
+                &pdf_asset.sha256,
+                &pdf_dir,
+                config.pdf.timeout_secs,
+                config.pdf.max_text_chars,
+            )
+            .await
+            {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(paper_id = %paper_id, attempt, error = %e, "PDF extract failed");
+                    if attempt == max_attempts {
+                        mark_stage_blocked(
+                            manifest,
+                            &format!("PDF extract failed for {}: {}", paper_id, e),
+                        );
+                    }
+                    continue;
+                }
+            };
 
-        // Use LLM-parsed URLs when available (more accurate than source metadata)
-        let llm_project_url = parsed.as_ref().and_then(|p| p.project_url.clone());
-        let llm_code_url = parsed.as_ref().and_then(|p| p.code_url.clone());
+            // Fetch metadata
+            let metadata = extract_from_source(paper_id, &candidate.source_metadata);
 
-        let read_cache_key = compute_read_cache_key(
-            paper_id,
-            &pdf_asset.sha256,
-            &extracted.text_extract_key,
-            &metadata.metadata_key,
-            &template_hash,
-            &config.reader.model,
-            &config.reader.language,
-        );
+            // Build prompt
+            let full_text =
+                std::fs::read_to_string(Path::new(&extracted.text_path)).unwrap_or_default();
+            let sections = parse_sections(&full_text);
+            let selected_text = select_sections_for_reading(
+                &full_text,
+                &sections,
+                config.reader.max_input_tokens * 3, // rough char estimate
+            );
 
-        let read_result = ReadResult {
-            paper_id: paper_id.clone(),
-            cache_key: read_cache_key.clone(),
-            generated_at: Utc::now(),
-            model_id: config.reader.model.clone(),
-            reader_template_hash: template_hash.clone(),
-            language: config.reader.language.clone(),
-            summary,
-            metadata: PaperMetadataSummary {
-                institutions: metadata.institutions.clone(),
-                notable_authors: metadata.notable_authors.clone(),
-                project_url: llm_project_url.or_else(|| metadata.project_url.clone()),
-                code_url: llm_code_url.or_else(|| metadata.code_url.clone()),
-            },
-            author_affiliations,
-            token_usage,
-            warnings: Vec::new(),
-        };
+            let authors_str = candidate
+                .authors
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
 
-        // Cache read result
-        let read_result_path = StatePath::new(format!(
-            "cache/papers/{}/read/{}.json",
-            paper_id, read_cache_key
-        ))?;
-        store.write_json(&read_result_path, &read_result)?;
+            let user_prompt = build_user_prompt(
+                &candidate.title,
+                &candidate.abstract_text,
+                &authors_str,
+                &selected_text,
+                &config.reader.language,
+            );
+            let system_prompt = build_system_prompt(None);
 
-        // Write read result to date directory
-        let read_date_path = StatePath::new(format!("archive/{}/read/{}.json", date, paper_id))?;
-        store.write_json(&read_date_path, &read_result)?;
+            let trimmed_prompt =
+                trim_to_token_budget(&user_prompt, config.reader.max_input_tokens * 4);
 
-        read_results.push(read_result);
+            // Call LLM
+            let (raw_response, token_usage) =
+                match reader.complete(&system_prompt, &trimmed_prompt).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(paper_id = %paper_id, attempt, error = %e, "LLM read failed");
+                        if attempt == max_attempts {
+                            mark_stage_blocked(
+                                manifest,
+                                &format!("LLM read failed for {}: {}", paper_id, e),
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+            // Parse LLM output (JSON with structured summary and affiliations)
+            let parsed = daily_paper_core::reader::template::parse_llm_output(&raw_response);
+            let summary = parsed
+                .as_ref()
+                .map(|p| p.summary.clone())
+                .unwrap_or_else(|| raw_response.clone());
+            let author_affiliations = parsed
+                .as_ref()
+                .map(|p| {
+                    p.author_affiliations
+                        .iter()
+                        .map(|aa| daily_paper_core::models::read::AuthorAffiliation {
+                            name: aa.name.clone(),
+                            affiliation: aa.affiliation.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Use LLM-parsed URLs when available (more accurate than source metadata)
+            let llm_project_url = parsed.as_ref().and_then(|p| p.project_url.clone());
+            let llm_code_url = parsed.as_ref().and_then(|p| p.code_url.clone());
+
+            let read_cache_key = compute_read_cache_key(
+                paper_id,
+                &pdf_asset.sha256,
+                &extracted.text_extract_key,
+                &metadata.metadata_key,
+                &template_hash,
+                &config.reader.model,
+                &config.reader.language,
+            );
+
+            let read_result = ReadResult {
+                paper_id: paper_id.clone(),
+                cache_key: read_cache_key.clone(),
+                generated_at: Utc::now(),
+                model_id: config.reader.model.clone(),
+                reader_template_hash: template_hash.clone(),
+                language: config.reader.language.clone(),
+                summary,
+                metadata: PaperMetadataSummary {
+                    institutions: metadata.institutions.clone(),
+                    notable_authors: metadata.notable_authors.clone(),
+                    project_url: llm_project_url.or_else(|| metadata.project_url.clone()),
+                    code_url: llm_code_url.or_else(|| metadata.code_url.clone()),
+                },
+                author_affiliations,
+                token_usage,
+                warnings: Vec::new(),
+            };
+
+            // Cache read result
+            let read_result_path = StatePath::new(format!(
+                "cache/papers/{}/read/{}.json",
+                paper_id, read_cache_key
+            ))?;
+            store.write_json(&read_result_path, &read_result)?;
+
+            // Write read result to date directory
+            let read_date_path =
+                StatePath::new(format!("archive/{}/read/{}.json", date, paper_id))?;
+            store.write_json(&read_date_path, &read_result)?;
+
+            result = Some(read_result);
+            break;
+        }
+
+        if let Some(r) = result {
+            read_results.push(r);
+        } else {
+            any_failure = true;
+        }
     }
 
     if any_failure && config.reader.on_read_failure == "block" {
@@ -1378,6 +1452,11 @@ async fn stage_deep_read(
         succeeded = read_results.len(),
         "deep read complete"
     );
+    progress.finish(&format!(
+        "{}/{} succeeded",
+        read_results.len(),
+        selected_ids.len()
+    ));
 
     // Store paper IDs as output_ref for cache loading
     let paper_ids_str = read_results
@@ -1459,12 +1538,19 @@ async fn stage_render(
     let html_body = render_html(&title, &report_papers, run_id);
     let text_body = render_text(&title, &report_papers, run_id);
 
-    // Write report files
-    let html_path = format!("cache/reports/{}/report.html", run_id);
-    let text_path = format!("cache/reports/{}/report.txt", run_id);
+    // Write report files to cache (versioned)
+    let cache_html_path = format!("cache/reports/{}/report.html", run_id);
+    let cache_text_path = format!("cache/reports/{}/report.txt", run_id);
 
-    store.write_string(&StatePath::new(&html_path)?, &html_body)?;
-    store.write_string(&StatePath::new(&text_path)?, &text_body)?;
+    store.write_string(&StatePath::new(&cache_html_path)?, &html_body)?;
+    store.write_string(&StatePath::new(&cache_text_path)?, &text_body)?;
+
+    // Write report files to archive
+    let archive_html_path = format!("archive/{}/report/report.html", input.date);
+    let archive_text_path = format!("archive/{}/report/report.txt", input.date);
+
+    store.write_string(&StatePath::new(&archive_html_path)?, &html_body)?;
+    store.write_string(&StatePath::new(&archive_text_path)?, &text_body)?;
 
     let report_hash = sha256_hex(html_body.as_bytes());
     let report_instance_id = format!("{}-{}", run_id, &report_hash[..8]);
@@ -1476,8 +1562,18 @@ async fn stage_render(
         run_id: run_id.to_string(),
         generated_at,
         title,
-        html_path: store.root().join(&html_path).to_string_lossy().to_string(),
-        text_path: Some(store.root().join(&text_path).to_string_lossy().to_string()),
+        html_path: store
+            .root()
+            .join(&cache_html_path)
+            .to_string_lossy()
+            .to_string(),
+        text_path: Some(
+            store
+                .root()
+                .join(&cache_text_path)
+                .to_string_lossy()
+                .to_string(),
+        ),
         ranked_paper_ids: input.selected_ids.to_vec(),
         read_paper_ids: input
             .read_results
@@ -1486,28 +1582,13 @@ async fn stage_render(
             .collect(),
     };
 
+    // Write report metadata to cache for send stage
     let report_meta_path = StatePath::new(format!("cache/reports/{}/report.json", run_id))?;
     store.write_json(&report_meta_path, &rendered)?;
 
-    let report_index = ReportIndex {
-        date: input.date.to_string(),
-        run_id: run_id.to_string(),
-        report_path: store
-            .root()
-            .join(report_meta_path.as_path())
-            .to_string_lossy()
-            .to_string(),
-        html_path: rendered.html_path.clone(),
-        text_path: rendered.text_path.clone(),
-        generated_at,
-        report_hash,
-    };
-    let report_index_path = StatePath::new(format!("archive/{}/report.json", input.date))?;
-    store.write_json(&report_index_path, &report_index)?;
-
     info!(
         papers = report_papers.len(),
-        html = %html_path,
+        html = %archive_html_path,
         "render complete"
     );
 
@@ -1516,8 +1597,18 @@ async fn stage_render(
     manifest.stages.push(record);
 
     Ok((
-        store.root().join(&html_path).to_string_lossy().to_string(),
-        Some(store.root().join(&text_path).to_string_lossy().to_string()),
+        store
+            .root()
+            .join(&archive_html_path)
+            .to_string_lossy()
+            .to_string(),
+        Some(
+            store
+                .root()
+                .join(&archive_text_path)
+                .to_string_lossy()
+                .to_string(),
+        ),
     ))
 }
 
@@ -2346,9 +2437,27 @@ fn load_cached_render(
         }
     }
 
-    let report_index_path = StatePath::new(format!("archive/{}/report.json", date))?;
-    if let Some(index) = store.read_json::<ReportIndex>(&report_index_path)? {
-        return Ok((index.html_path, index.text_path));
+    // Read report directly from archive
+    let archive_html_path = StatePath::new(format!("archive/{}/report/report.html", date))?;
+    if store.exists(&archive_html_path)? {
+        let html = store
+            .root()
+            .join(archive_html_path.as_path())
+            .to_string_lossy()
+            .to_string();
+        let text_path = StatePath::new(format!("archive/{}/report/report.txt", date))?;
+        let text = if store.exists(&text_path)? {
+            Some(
+                store
+                    .root()
+                    .join(text_path.as_path())
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        return Ok((html, text));
     }
 
     anyhow::bail!("no cached report found for date {}", date)
