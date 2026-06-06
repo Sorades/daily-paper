@@ -40,6 +40,13 @@ impl ZoteroClient {
     }
 
     async fn get_with_retry<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
+        let resp = self.request_with_retry(url).await?;
+        let data = resp.json::<T>().await?;
+        Ok(data)
+    }
+
+    /// Send a GET request with retry logic, returning the raw response.
+    async fn request_with_retry(&self, url: &str) -> Result<reqwest::Response> {
         let mut last_err = None;
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
@@ -85,8 +92,7 @@ impl ZoteroClient {
                 )));
             }
 
-            let data = resp.json::<T>().await?;
-            return Ok(data);
+            return Ok(resp);
         }
 
         Err(last_err.unwrap_or_else(|| Error::RetryableNetwork("max retries exceeded".into())))
@@ -95,14 +101,7 @@ impl ZoteroClient {
     /// Get the current library version (for incremental sync).
     pub async fn get_library_version(&self) -> Result<Option<u64>> {
         let url = format!("{}?limit=1&format=keys", self.items_url());
-        let resp = self
-            .client
-            .get(&url)
-            .header("Zotero-API-Key", &self.api_key)
-            .header("Zotero-API-Version", "3")
-            .send()
-            .await
-            .map_err(|e| Error::RetryableNetwork(e.to_string()))?;
+        let resp = self.request_with_retry(&url).await?;
 
         let version = resp
             .headers()

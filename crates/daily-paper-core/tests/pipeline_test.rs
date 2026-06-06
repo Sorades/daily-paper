@@ -16,10 +16,8 @@ async fn test_embedding_produces_vectors() {
         2,
     );
 
-    let text = daily_paper_core::embedding::openai::EmbeddingClient::make_input_text(
-        "Test Paper",
-        "This is a test abstract.",
-    );
+    let text =
+        daily_paper_core::embedding::make_input_text("Test Paper", "This is a test abstract.");
 
     let embedding = client.embed_one(&text).await.unwrap();
     assert_eq!(embedding.len(), 10);

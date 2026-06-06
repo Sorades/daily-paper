@@ -230,3 +230,69 @@ pub enum PipelineEvent {
         status: RunStatus,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kebab_roundtrip() {
+        for stage in StageName::all() {
+            let kebab = stage.to_kebab();
+            let parsed = StageName::from_kebab(kebab);
+            assert_eq!(
+                parsed.as_ref(),
+                Some(stage),
+                "roundtrip failed for {:?}",
+                kebab
+            );
+        }
+    }
+
+    #[test]
+    fn from_kebab_unknown_returns_none() {
+        assert!(StageName::from_kebab("unknown-stage").is_none());
+        assert!(StageName::from_kebab("").is_none());
+    }
+
+    #[test]
+    fn all_stages_in_order() {
+        let all = StageName::all();
+        assert_eq!(all.len(), 8);
+        assert_eq!(all[0], StageName::ZoteroSync);
+        assert_eq!(all[all.len() - 1], StageName::Send);
+    }
+
+    #[test]
+    fn required_stages_zotero_sync_is_empty() {
+        assert!(StageName::ZoteroSync.required_stages().is_empty());
+    }
+
+    #[test]
+    fn required_stages_send_needs_all_others() {
+        let req = StageName::Send.required_stages();
+        assert!(req.contains(&StageName::ZoteroSync));
+        assert!(req.contains(&StageName::SourceFetch));
+        assert!(req.contains(&StageName::Deduplicate));
+        assert!(req.contains(&StageName::Embedding));
+        assert!(req.contains(&StageName::Rerank));
+        assert!(req.contains(&StageName::DeepRead));
+        assert!(req.contains(&StageName::Render));
+    }
+
+    #[test]
+    fn required_stages_embedding_needs_prior() {
+        let req = StageName::Embedding.required_stages();
+        assert!(req.contains(&StageName::ZoteroSync));
+        assert!(req.contains(&StageName::SourceFetch));
+        assert!(req.contains(&StageName::Deduplicate));
+        assert!(!req.contains(&StageName::Rerank));
+    }
+
+    #[test]
+    fn pdf_fetch_requires_up_to_rerank() {
+        let req = StageName::PdfFetch.required_stages();
+        assert!(req.contains(&StageName::Rerank));
+        assert!(!req.contains(&StageName::DeepRead));
+    }
+}

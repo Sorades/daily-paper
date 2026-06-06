@@ -52,3 +52,10 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    /// Whether this error is transient and worth retrying.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Error::RetryableNetwork(_) | Error::RateLimited { .. })
+    }
+}

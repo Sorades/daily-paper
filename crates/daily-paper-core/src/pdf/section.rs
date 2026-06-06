@@ -2,7 +2,7 @@ use crate::models::pdf::PaperSection;
 use regex::Regex;
 
 /// Find the largest byte index <= `max` that falls on a UTF-8 char boundary.
-fn safe_char_boundary(text: &str, max: usize) -> usize {
+pub(crate) fn safe_char_boundary(text: &str, max: usize) -> usize {
     let mut boundary = max.min(text.len());
     while boundary > 0 && !text.is_char_boundary(boundary) {
         boundary -= 1;
@@ -19,7 +19,7 @@ const SECTION_PATTERNS: &[&str] = &[
     r"(?i)^\s*(\d+\.?\s+)?(discussion|analysis)\s*$",
     r"(?i)^\s*(\d+\.?\s+)?(conclusion|conclusions|summary)\s*$",
     r"(?i)^\s*(\d+\.?\s+)?(abstract)\s*$",
-    r"(?i)^\s*(\d+\.?\s+)?(acknowledgment|acknowledgment|acknowledgement)s?\s*$",
+    r"(?i)^\s*(\d+\.?\s+)?(acknowledgments|acknowledgement)s?\s*$",
     r"(?i)^\s*(\d+\.?\s+)?(reference|references|bibliography)\s*$",
     r"(?i)^\s*(\d+\.?\s+)?(appendix|appendices)\s*$",
 ];

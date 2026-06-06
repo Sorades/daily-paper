@@ -44,3 +44,117 @@ pub fn validate(raw: &RawConfig) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::raw::*;
+
+    fn valid_raw() -> RawConfig {
+        RawConfig {
+            zotero: ZoteroConfig {
+                user_id: "12345".into(),
+                api_key: "key".into(),
+                max_snapshot_age_hours: None,
+                filters: None,
+            },
+            sources: vec![SourceConfig {
+                kind: "arxiv".into(),
+                categories: vec!["cs.AI".into()],
+                include_cross_list: None,
+            }],
+            embedding: EmbeddingConfig {
+                kind: "fastembed".into(),
+                base_url: None,
+                api_key: None,
+                model: None,
+                batch_size: None,
+                timeout_secs: None,
+                max_retries: None,
+                max_concurrency: None,
+            },
+            reranker: RerankerConfig {
+                kind: "cosine".into(),
+                top_k_library_matches: None,
+            },
+            reader: ReaderConfig {
+                kind: "openai".into(),
+                base_url: "http://localhost:8080/v1".into(),
+                api_key: "key".into(),
+                model: "gpt-4o-mini".into(),
+                top_n: None,
+                language: None,
+                require_full_text: None,
+                on_read_failure: None,
+                timeout_secs: None,
+                max_retries: None,
+                max_concurrency: None,
+                max_input_tokens: None,
+            },
+            pdf: PdfConfig {
+                extractor: "pdftotext".into(),
+                timeout_secs: None,
+                max_pdf_mb: None,
+                max_text_chars: None,
+            },
+            email: EmailConfig {
+                smtp_server: "smtp.example.com".into(),
+                smtp_port: 587,
+                sender: "a@b.com".into(),
+                receiver: "c@d.com".into(),
+                password: "pass".into(),
+            },
+            web: None,
+        }
+    }
+
+    #[test]
+    fn valid_config_passes() {
+        assert!(validate(&valid_raw()).is_ok());
+    }
+
+    #[test]
+    fn empty_user_id_fails() {
+        let mut raw = valid_raw();
+        raw.zotero.user_id = String::new();
+        assert!(validate(&raw).is_err());
+    }
+
+    #[test]
+    fn empty_sources_fails() {
+        let mut raw = valid_raw();
+        raw.sources = vec![];
+        assert!(validate(&raw).is_err());
+    }
+
+    #[test]
+    fn non_fastembed_missing_base_url_fails() {
+        let mut raw = valid_raw();
+        raw.embedding.kind = "openai".into();
+        raw.embedding.base_url = None;
+        assert!(validate(&raw).is_err());
+    }
+
+    #[test]
+    fn non_fastembed_missing_api_key_fails() {
+        let mut raw = valid_raw();
+        raw.embedding.kind = "openai".into();
+        raw.embedding.base_url = Some("http://localhost".into());
+        raw.embedding.api_key = None;
+        assert!(validate(&raw).is_err());
+    }
+
+    #[test]
+    fn empty_reader_base_url_fails() {
+        let mut raw = valid_raw();
+        raw.reader.base_url = String::new();
+        assert!(validate(&raw).is_err());
+    }
+
+    #[test]
+    fn empty_smtp_server_fails() {
+        let mut raw = valid_raw();
+        raw.email.smtp_server = String::new();
+        assert!(validate(&raw).is_err());
+    }
+}

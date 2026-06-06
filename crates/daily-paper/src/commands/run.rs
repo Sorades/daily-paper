@@ -11,6 +11,7 @@ use crate::progress::StageProgress;
 use daily_paper_core::config::load_config;
 use daily_paper_core::config::ResolvedConfig;
 use daily_paper_core::embedding::openai::EmbeddingClient;
+use daily_paper_core::embedding::{compute_input_hash, make_input_text};
 use daily_paper_core::metadata::fetcher::extract_from_source;
 use daily_paper_core::models::candidate::CandidatePaper;
 use daily_paper_core::models::common::{sha256_hex, DateWindow};
@@ -851,9 +852,8 @@ async fn stage_embedding(
 
     // Check cache for candidates
     for (i, candidate) in candidates.iter().enumerate() {
-        let input_text =
-            EmbeddingClient::make_input_text(&candidate.title, &candidate.abstract_text);
-        let input_hash = EmbeddingClient::compute_input_hash(
+        let input_text = make_input_text(&candidate.title, &candidate.abstract_text);
+        let input_hash = compute_input_hash(
             provider_id,
             &config.embedding.model,
             &config_hash,
@@ -913,9 +913,8 @@ async fn stage_embedding(
 
     // Add cached candidates
     for candidate in candidates {
-        let input_text =
-            EmbeddingClient::make_input_text(&candidate.title, &candidate.abstract_text);
-        let input_hash = EmbeddingClient::compute_input_hash(
+        let input_text = make_input_text(&candidate.title, &candidate.abstract_text);
+        let input_hash = compute_input_hash(
             provider_id,
             &config.embedding.model,
             &config_hash,
@@ -974,10 +973,10 @@ async fn stage_embedding(
             .find(|p| p.library_id == pref.library_id)
         {
             let input_text = match (&lib_paper.title, &lib_paper.abstract_text) {
-                (t, Some(a)) if !a.is_empty() => EmbeddingClient::make_input_text(t, a),
+                (t, Some(a)) if !a.is_empty() => make_input_text(t, a),
                 _ => continue,
             };
-            let input_hash = EmbeddingClient::compute_input_hash(
+            let input_hash = compute_input_hash(
                 provider_id,
                 &config.embedding.model,
                 &config_hash,

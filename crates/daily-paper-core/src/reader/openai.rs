@@ -81,7 +81,7 @@ impl ReaderClient {
                     tokio::time::sleep(Duration::from_secs(retry_after_secs)).await;
                     last_err = Some(Error::RateLimited { retry_after_secs });
                 }
-                Err(e) if is_retryable(&e) => {
+                Err(e) if e.is_retryable() => {
                     warn!(error = %e, "retryable LLM error");
                     last_err = Some(e);
                 }
@@ -167,8 +167,4 @@ impl ReaderClient {
         debug!(content_len = content.len(), "got LLM response");
         Ok((content, usage))
     }
-}
-
-fn is_retryable(err: &Error) -> bool {
-    matches!(err, Error::RetryableNetwork(_) | Error::RateLimited { .. })
 }

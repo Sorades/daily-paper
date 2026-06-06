@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::error::{Error, Result};
 use crate::models::pdf::{compute_text_extract_key, ExtractedText};
 
-use super::section::parse_sections;
+use super::section::{parse_sections, safe_char_boundary};
 
 /// Extract text from a PDF using the external `pdftotext` command.
 pub async fn extract_text(
@@ -60,9 +60,9 @@ pub async fn extract_text(
         )));
     }
 
-    // Truncate if needed
+    // Truncate if needed (safe for multi-byte UTF-8)
     if text.len() > max_chars {
-        text.truncate(max_chars);
+        text.truncate(safe_char_boundary(&text, max_chars));
     }
 
     // Parse sections

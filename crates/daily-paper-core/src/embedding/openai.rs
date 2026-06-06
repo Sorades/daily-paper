@@ -39,27 +39,6 @@ impl EmbeddingClient {
         }
     }
 
-    /// Compute embedding input text from title and abstract.
-    pub fn make_input_text(title: &str, abstract_text: &str) -> String {
-        format!("{}\n\n{}", title, abstract_text)
-    }
-
-    /// Compute the input hash for cache key.
-    pub fn compute_input_hash(
-        provider_id: &str,
-        model_id: &str,
-        config_hash: &str,
-        input_text: &str,
-    ) -> String {
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(provider_id.as_bytes());
-        hasher.update(model_id.as_bytes());
-        hasher.update(config_hash.as_bytes());
-        hasher.update(input_text.as_bytes());
-        hex::encode(hasher.finalize())
-    }
-
     /// Embed a batch of texts, returning vectors in the same order.
     pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
@@ -118,7 +97,7 @@ impl EmbeddingClient {
                     tokio::time::sleep(Duration::from_secs(retry_after_secs)).await;
                     last_err = Some(Error::RateLimited { retry_after_secs });
                 }
-                Err(e) if is_retryable(&e) => {
+                Err(e) if e.is_retryable() => {
                     warn!(error = %e, "retryable embedding error");
                     last_err = Some(e);
                 }
@@ -195,8 +174,4 @@ impl EmbeddingClient {
         );
         Ok(embeddings)
     }
-}
-
-fn is_retryable(err: &Error) -> bool {
-    matches!(err, Error::RetryableNetwork(_) | Error::RateLimited { .. })
 }

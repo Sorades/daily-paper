@@ -432,6 +432,7 @@ fn escape_html(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 #[cfg(test)]
@@ -480,5 +481,6 @@ mod tests {
     fn escape_html_special_chars() {
         assert_eq!(escape_html("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;");
         assert_eq!(escape_html("a & b"), "a &amp; b");
+        assert_eq!(escape_html("it's"), "it&#39;s");
     }
 }

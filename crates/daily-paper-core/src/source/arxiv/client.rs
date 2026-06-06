@@ -17,7 +17,6 @@ pub struct ArxivClient {
     base_url: String,
     categories: Vec<String>,
     include_cross_list: bool,
-    _max_results: usize,
 }
 
 impl ArxivClient {
@@ -32,7 +31,6 @@ impl ArxivClient {
             base_url: ARXIV_RSS_BASE.to_string(),
             categories,
             include_cross_list,
-            _max_results: 2000,
         }
     }
 

@@ -190,3 +190,108 @@ impl ResolvedConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::raw::*;
+
+    fn minimal_raw() -> RawConfig {
+        RawConfig {
+            zotero: ZoteroConfig {
+                user_id: "12345".into(),
+                api_key: "key".into(),
+                max_snapshot_age_hours: None,
+                filters: None,
+            },
+            sources: vec![SourceConfig {
+                kind: "arxiv".into(),
+                categories: vec!["cs.AI".into()],
+                include_cross_list: None,
+            }],
+            embedding: EmbeddingConfig {
+                kind: "fastembed".into(),
+                base_url: None,
+                api_key: None,
+                model: None,
+                batch_size: None,
+                timeout_secs: None,
+                max_retries: None,
+                max_concurrency: None,
+            },
+            reranker: RerankerConfig {
+                kind: "cosine".into(),
+                top_k_library_matches: None,
+            },
+            reader: ReaderConfig {
+                kind: "openai".into(),
+                base_url: "http://localhost:8080/v1".into(),
+                api_key: "key".into(),
+                model: "gpt-4o-mini".into(),
+                top_n: None,
+                language: None,
+                require_full_text: None,
+                on_read_failure: None,
+                timeout_secs: None,
+                max_retries: None,
+                max_concurrency: None,
+                max_input_tokens: None,
+            },
+            pdf: PdfConfig {
+                extractor: "pdftotext".into(),
+                timeout_secs: None,
+                max_pdf_mb: None,
+                max_text_chars: None,
+            },
+            email: EmailConfig {
+                smtp_server: "smtp.example.com".into(),
+                smtp_port: 587,
+                sender: "a@b.com".into(),
+                receiver: "c@d.com".into(),
+                password: "pass".into(),
+            },
+            web: None,
+        }
+    }
+
+    #[test]
+    fn fastembed_default_model() {
+        let cfg = ResolvedConfig::from_raw(&minimal_raw()).unwrap();
+        assert_eq!(cfg.embedding.model, "BAAI/bge-small-en-v1.5");
+    }
+
+    #[test]
+    fn openai_default_model() {
+        let mut raw = minimal_raw();
+        raw.embedding.kind = "openai".into();
+        raw.embedding.base_url = Some("http://localhost".into());
+        raw.embedding.api_key = Some("key".into());
+        let cfg = ResolvedConfig::from_raw(&raw).unwrap();
+        assert_eq!(cfg.embedding.model, "text-embedding-3-small");
+    }
+
+    #[test]
+    fn on_read_failure_default_is_retry() {
+        let cfg = ResolvedConfig::from_raw(&minimal_raw()).unwrap();
+        assert_eq!(cfg.reader.on_read_failure, "retry");
+    }
+
+    #[test]
+    fn reader_defaults() {
+        let cfg = ResolvedConfig::from_raw(&minimal_raw()).unwrap();
+        assert_eq!(cfg.reader.top_n, 10);
+        assert_eq!(cfg.reader.language, "zh-CN");
+        assert_eq!(cfg.reader.require_full_text, true);
+        assert_eq!(cfg.reader.timeout_secs, 120);
+        assert_eq!(cfg.reader.max_retries, 5);
+        assert_eq!(cfg.reader.max_concurrency, 2);
+        assert_eq!(cfg.reader.max_input_tokens, 60000);
+    }
+
+    #[test]
+    fn web_defaults() {
+        let cfg = ResolvedConfig::from_raw(&minimal_raw()).unwrap();
+        assert_eq!(cfg.web.port, 8991);
+        assert_eq!(cfg.web.ui_path, "ui");
+    }
+}
