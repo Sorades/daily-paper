@@ -10,6 +10,7 @@ pub struct RawConfig {
     pub pdf: PdfConfig,
     pub email: EmailConfig,
     pub web: Option<WebConfig>,
+    pub schedule: Option<ScheduleConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -89,4 +90,12 @@ pub struct EmailConfig {
 pub struct WebConfig {
     pub port: Option<u16>,
     pub ui_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ScheduleConfig {
+    /// Whether scheduled runs are enabled (default: true)
+    pub enabled: Option<bool>,
+    /// Time to run daily in "HH:MM" format (default: "07:30")
+    pub time: Option<String>,
 }

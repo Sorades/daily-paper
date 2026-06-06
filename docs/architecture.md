@@ -88,3 +88,5 @@ config → zotero_sync → source_fetch → deduplicate → embedding → rerank
 - CLI 使用 indicatif 显示进度条和 ETA
 - WebLogLayer 将 tracing 事件桥接到 LogBuffer（历史回放）和 broadcast channel（实时推送）
 - `/api/logs/stream` SSE 端点先发送缓冲历史，再实时推送新日志
+- 内置 scheduler：`daily-paper serve` 启动后按时执行 pipeline（默认每天 07:30，可在 `[schedule]` 配置）
+- scheduler 与 API trigger 共用 `pipeline_running` 互斥锁，不会冲突

@@ -13,11 +13,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
-use tracing::info;
+use tracing::{info, warn};
 
 use chrono::Datelike;
 
-use crate::cli::ServeArgs;
 use crate::commands::run::{
     build_cli_overrides, classify_error, compute_date_window, find_source_run, generate_run_id,
     run_pipeline,
@@ -164,7 +163,7 @@ fn api_error(status: StatusCode, message: impl Into<String>) -> ApiError {
 
 // ── Entry point ──────────────────────────────────────────────────────
 
-pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
+pub async fn execute(data_dir: &Path, port: Option<u16>, no_schedule: bool) -> anyhow::Result<()> {
     let config_path = data_dir.join("config.toml");
     let (_raw, resolved) =
         load_config(&config_path).map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
@@ -172,7 +171,7 @@ pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
     let store = FileStateStore::new(data_dir.to_path_buf());
     store.ensure_dirs()?;
 
-    let port = args.port.unwrap_or(resolved.web.port);
+    let port = port.unwrap_or(resolved.web.port);
     let (pipeline_tx, _) = broadcast::channel(256);
     let log_buffer: LogBuffer = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES)));
     let (log_tx, _) = broadcast::channel::<String>(1024);
@@ -201,6 +200,11 @@ pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
     }
 
     let ui_path = data_dir.join("ui");
+
+    // Save schedule config before state takes ownership of resolved
+    let schedule_enabled = resolved.schedule.enabled && !no_schedule;
+    let schedule_hour = resolved.schedule.hour;
+    let schedule_minute = resolved.schedule.minute;
 
     let state = AppState {
         store: Arc::new(store),
@@ -247,10 +251,18 @@ pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
         .nest_service("/ui", ServeDir::new(&ui_path))
         .nest_service("/report", ServeDir::new(data_dir.join("cache/reports")))
         .layer(CorsLayer::permissive())
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr = format!("0.0.0.0:{}", port);
     info!(addr = %addr, "starting web server");
+
+    // Spawn the scheduler if enabled
+    if schedule_enabled {
+        let scheduler_state = state;
+        tokio::spawn(async move {
+            scheduler_loop(scheduler_state, schedule_hour, schedule_minute).await;
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("listening on http://{}", addr);
@@ -259,23 +271,98 @@ pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ── Scheduler ──────────────────────────────────────────────────────
+
+/// Calculate the next instant at the given local hour:minute.
+/// If that time has already passed today, returns tomorrow.
+fn next_run_instant(hour: u32, minute: u32) -> tokio::time::Instant {
+    use chrono::Timelike;
+
+    let now = chrono::Local::now();
+    let today_target = now
+        .with_hour(hour)
+        .and_then(|t| t.with_minute(minute))
+        .and_then(|t| t.with_second(0))
+        .and_then(|t| t.with_nanosecond(0))
+        .unwrap();
+
+    let target = if today_target > now {
+        today_target
+    } else {
+        today_target + chrono::Duration::days(1)
+    };
+
+    let duration = (target - now)
+        .to_std()
+        .unwrap_or(std::time::Duration::from_secs(60));
+
+    tokio::time::Instant::now() + duration
+}
+
+async fn scheduler_loop(state: AppState, hour: u32, minute: u32) {
+    info!(
+        hour = hour,
+        minute = minute,
+        "scheduler enabled, will run pipeline daily"
+    );
+
+    loop {
+        let next = next_run_instant(hour, minute);
+        let next_chrono = chrono::Local::now()
+            + chrono::Duration::from_std(next.duration_since(tokio::time::Instant::now()))
+                .unwrap_or_default();
+        info!(
+            next_run = %next_chrono.format("%Y-%m-%d %H:%M:%S"),
+            "next scheduled run"
+        );
+
+        tokio::time::sleep_until(next).await;
+
+        if state.pipeline_running.load(Ordering::SeqCst) {
+            warn!("scheduled run skipped: pipeline already running");
+            continue;
+        }
+
+        info!("scheduled run starting");
+        let req = RunRequest {
+            stages: None,
+            from_run: None,
+            date: None,
+            dry_run: Some(false),
+            force_zotero_sync: None,
+            force_rerank: None,
+            force_read: None,
+            force_send: None,
+            max_candidates: None,
+            no_email: Some(false),
+            send_email: Some(true),
+        };
+
+        match spawn_pipeline(&state, &req) {
+            Ok(run_id) => info!(run_id = %run_id, "scheduled pipeline started"),
+            Err((status, msg)) => {
+                warn!(
+                    status = %status,
+                    message = %msg.message,
+                    "scheduled run failed to start"
+                );
+            }
+        }
+    }
+}
+
 // ── Run handlers ────────────────────────────────────────────────────
 
-async fn api_run_trigger(
-    State(state): State<AppState>,
-    Json(req): Json<RunRequest>,
-) -> Result<Json<RunStartResponse>, ApiError> {
-    if state.pipeline_running.load(Ordering::SeqCst) {
-        return Err(api_error(StatusCode::CONFLICT, "pipeline already running"));
-    }
-
+/// Core pipeline spawning logic shared by the API handler and the scheduler.
+/// Returns the run_id on success.
+fn spawn_pipeline(state: &AppState, req: &RunRequest) -> Result<String, ApiError> {
     let stages = req.stages.clone().unwrap_or_default();
     let stage_filter = parse_stage_filter(&stages)?;
 
     let run_args = crate::cli::RunArgs {
-        date: req.date,
+        date: req.date.clone(),
         stages,
-        from_run: req.from_run,
+        from_run: req.from_run.clone(),
         dry_run: req.dry_run.unwrap_or(true),
         send_email: req.send_email.unwrap_or(false),
         no_email: req.no_email.unwrap_or(true),
@@ -406,6 +493,14 @@ async fn api_run_trigger(
         running.store(false, Ordering::SeqCst);
     });
 
+    Ok(run_id)
+}
+
+async fn api_run_trigger(
+    State(state): State<AppState>,
+    Json(req): Json<RunRequest>,
+) -> Result<Json<RunStartResponse>, ApiError> {
+    let run_id = spawn_pipeline(&state, &req)?;
     Ok(Json(RunStartResponse {
         run_id,
         message: "pipeline started".to_string(),

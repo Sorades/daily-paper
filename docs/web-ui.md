@@ -132,6 +132,14 @@
 - 事件类型：`log`（日志行 JSON）、`ping`（心跳）。
 - 先发送缓冲历史，再实时推送新日志。
 
+### 内置 Scheduler
+
+- `daily-paper serve` 启动后，如果 `[schedule] enabled = true`，会按时自动执行 pipeline。
+- 默认每天 07:30（本地时间），可在 `config.toml` 的 `[schedule]` 段修改。
+- `--no-schedule` flag 可在启动时禁用。
+- scheduler 与 API trigger 共用 `pipeline_running` 互斥锁，不会冲突。
+- 定时运行默认发邮件（`send_email=true`），与手动 API 触发的默认行为不同。
+
 ## API 错误处理
 
 错误响应统一是：

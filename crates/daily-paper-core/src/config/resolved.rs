@@ -1,6 +1,18 @@
 use super::raw::RawConfig;
 use crate::error::Result;
 
+/// Parse "HH:MM" into (hour, minute). Returns None on invalid format.
+fn parse_hhmm(s: &str) -> Option<(u32, u32)> {
+    let (h, m) = s.split_once(':')?;
+    let hour: u32 = h.trim().parse().ok()?;
+    let minute: u32 = m.trim().parse().ok()?;
+    if hour < 24 && minute < 60 {
+        Some((hour, minute))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     pub zotero: ResolvedZoteroConfig,
@@ -11,6 +23,7 @@ pub struct ResolvedConfig {
     pub pdf: ResolvedPdfConfig,
     pub email: ResolvedEmailConfig,
     pub web: ResolvedWebConfig,
+    pub schedule: ResolvedScheduleConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +103,13 @@ pub struct ResolvedEmailConfig {
 pub struct ResolvedWebConfig {
     pub port: u16,
     pub ui_path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedScheduleConfig {
+    pub enabled: bool,
+    pub hour: u32,
+    pub minute: u32,
 }
 
 impl ResolvedConfig {
@@ -187,6 +207,24 @@ impl ResolvedConfig {
                     .and_then(|w| w.ui_path.clone())
                     .unwrap_or_else(|| "ui".to_string()),
             },
+            schedule: {
+                let enabled = raw
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.enabled)
+                    .unwrap_or(true);
+                let time_str = raw
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.time.clone())
+                    .unwrap_or_else(|| "07:30".to_string());
+                let (hour, minute) = parse_hhmm(&time_str).unwrap_or((7, 30));
+                ResolvedScheduleConfig {
+                    enabled,
+                    hour,
+                    minute,
+                }
+            },
         })
     }
 }
@@ -251,6 +289,7 @@ mod tests {
                 password: "pass".into(),
             },
             web: None,
+            schedule: None,
         }
     }
 
@@ -293,5 +332,13 @@ mod tests {
         let cfg = ResolvedConfig::from_raw(&minimal_raw()).unwrap();
         assert_eq!(cfg.web.port, 8991);
         assert_eq!(cfg.web.ui_path, "ui");
+    }
+
+    #[test]
+    fn schedule_defaults() {
+        let cfg = ResolvedConfig::from_raw(&minimal_raw()).unwrap();
+        assert!(cfg.schedule.enabled);
+        assert_eq!(cfg.schedule.hour, 7);
+        assert_eq!(cfg.schedule.minute, 30);
     }
 }

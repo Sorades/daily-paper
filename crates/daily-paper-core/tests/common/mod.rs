@@ -1,7 +1,7 @@
 use daily_paper_core::config::{
     ResolvedConfig, ResolvedEmailConfig, ResolvedEmbeddingConfig, ResolvedPdfConfig,
-    ResolvedReaderConfig, ResolvedRerankerConfig, ResolvedSourceConfig, ResolvedWebConfig,
-    ResolvedZoteroConfig,
+    ResolvedReaderConfig, ResolvedRerankerConfig, ResolvedScheduleConfig, ResolvedSourceConfig,
+    ResolvedWebConfig, ResolvedZoteroConfig,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path};
@@ -182,6 +182,11 @@ pub fn make_test_config(mock_server_url: &str) -> ResolvedConfig {
         web: ResolvedWebConfig {
             port: 8991,
             ui_path: ".daily-paper/ui".to_string(),
+        },
+        schedule: ResolvedScheduleConfig {
+            enabled: false,
+            hour: 7,
+            minute: 30,
         },
     }
 }

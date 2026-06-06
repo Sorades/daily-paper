@@ -12,19 +12,17 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     let data_dir = cli.directory.unwrap_or_else(default_data_dir);
 
     match cli.command {
-        Commands::Run(args) => {
+        // No subcommand → start web server + scheduler
+        None => serve::execute(&data_dir, cli.port, cli.no_schedule).await?,
+        Some(Commands::Run(args)) => {
             init_tracing();
             run::execute(&data_dir, args).await?
         }
-        Commands::Status(args) => {
+        Some(Commands::Status(args)) => {
             init_tracing();
             status::execute(&data_dir, args).await?
         }
-        Commands::Serve(args) => {
-            // serve::execute installs its own subscriber with WebLogLayer
-            serve::execute(&data_dir, args).await?
-        }
-        Commands::Config(cmd) => {
+        Some(Commands::Config(cmd)) => {
             init_tracing();
             match cmd {
                 crate::cli::ConfigCommands::Show => config::show(&data_dir)?,
@@ -32,7 +30,7 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 crate::cli::ConfigCommands::Init => config::init(&data_dir)?,
             }
         }
-        Commands::Cache(cmd) => {
+        Some(Commands::Cache(cmd)) => {
             init_tracing();
             match cmd {
                 crate::cli::CacheCommands::List => cache::list(&data_dir)?,
@@ -40,7 +38,7 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 crate::cli::CacheCommands::Size => cache::size(&data_dir)?,
             }
         }
-        Commands::Archive(cmd) => {
+        Some(Commands::Archive(cmd)) => {
             init_tracing();
             match cmd {
                 crate::cli::ArchiveCommands::List => archive::list(&data_dir)?,

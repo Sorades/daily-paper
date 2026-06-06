@@ -105,6 +105,7 @@ mod tests {
                 password: "pass".into(),
             },
             web: None,
+            schedule: None,
         }
     }
 

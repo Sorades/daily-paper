@@ -4,25 +4,33 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "daily-paper",
     version,
-    about = "Daily paper recommendation and deep reading pipeline"
+    about = "Daily paper recommendation and deep reading pipeline",
+    // Running `daily-paper` with no subcommand starts the web server + scheduler
+    after_help = "Run without a subcommand to start the web server and scheduler."
 )]
 pub struct Cli {
     /// Path to data directory (default: ~/.config/daily-paper or ~/.config/daily-paper-dev in dev mode)
     #[arg(short, long)]
     pub directory: Option<std::path::PathBuf>,
 
+    /// Override port to listen on (default: from config or 8991)
+    #[arg(long, global = true)]
+    pub port: Option<u16>,
+
+    /// Disable the built-in scheduler (overrides config)
+    #[arg(long, global = true)]
+    pub no_schedule: bool,
+
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Run the full pipeline
+    /// Run the full pipeline once (manual)
     Run(RunArgs),
     /// Show status of recent runs
     Status(StatusArgs),
-    /// Serve reports as a web page
-    Serve(ServeArgs),
     /// Manage configuration
     #[command(subcommand)]
     Config(ConfigCommands),
@@ -128,11 +136,4 @@ pub struct StatusArgs {
     /// Show status for a specific run
     #[arg(long)]
     pub run_id: Option<String>,
-}
-
-#[derive(Parser, Clone)]
-pub struct ServeArgs {
-    /// Override port to listen on (default: from config or 8991)
-    #[arg(long)]
-    pub port: Option<u16>,
 }
