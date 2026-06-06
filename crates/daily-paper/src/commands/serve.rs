@@ -36,10 +36,11 @@ struct AppState {
     config: Arc<RwLock<ResolvedConfig>>,
     pipeline_tx: broadcast::Sender<PipelineEvent>,
     log_buffer: LogBuffer,
+    log_tx: broadcast::Sender<String>,
     pipeline_running: Arc<AtomicBool>,
 }
 
-type LogBuffer = Arc<Mutex<VecDeque<String>>>;
+pub(crate) type LogBuffer = Arc<Mutex<VecDeque<String>>>;
 
 const MAX_LOG_LINES: usize = 10_000;
 
@@ -174,6 +175,30 @@ pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
     let port = args.port.unwrap_or(resolved.web.port);
     let (pipeline_tx, _) = broadcast::channel(256);
     let log_buffer: LogBuffer = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES)));
+    let (log_tx, _) = broadcast::channel::<String>(1024);
+
+    // Install WebLogLayer so tracing events feed into log_buffer + log_tx.
+    // This MUST run before any tracing macros; dispatch() does not call
+    // init_tracing() for the Serve command, so no global subscriber is set.
+    {
+        use crate::log_layer::WebLogLayer;
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+        use tracing_subscriber::Layer;
+
+        let web_layer = WebLogLayer::new(log_buffer.clone(), log_tx.clone(), MAX_LOG_LINES);
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            );
+
+        tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(web_layer)
+            .init();
+    }
 
     let ui_path = data_dir.join("ui");
 
@@ -183,6 +208,7 @@ pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
         config: Arc::new(RwLock::new(resolved)),
         pipeline_tx,
         log_buffer,
+        log_tx,
         pipeline_running: Arc::new(AtomicBool::new(false)),
     };
 
@@ -211,6 +237,8 @@ pub async fn execute(data_dir: &Path, args: ServeArgs) -> anyhow::Result<()> {
         .route("/api/cache/{kind}", axum::routing::delete(api_cache_clean))
         // Logs
         .route("/api/logs/stream", axum::routing::get(api_logs_stream))
+        // Status
+        .route("/api/status", axum::routing::get(api_status))
         // Static files & redirect
         .route(
             "/",
@@ -502,21 +530,21 @@ async fn api_date_detail(
 async fn api_run_detail(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<String>,
-) -> Result<Json<RunManifest>, StatusCode> {
+) -> Result<Json<RunManifest>, ApiError> {
     let path = StatePath::new(format!("cache/runs/{}/manifest.json", run_id))
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid run id"))?;
     state
         .store
         .read_json(&path)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "run not found"))
         .map(Json)
 }
 
 async fn api_run_delete(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<String>,
-) -> Result<Json<ApiMessage>, StatusCode> {
+) -> Result<Json<ApiMessage>, ApiError> {
     remove_run_artifacts(&state.store, &run_id)?;
     Ok(Json(ApiMessage {
         message: "deleted".to_string(),
@@ -526,7 +554,7 @@ async fn api_run_delete(
 async fn api_date_delete(
     State(state): State<AppState>,
     AxumPath(date): AxumPath<String>,
-) -> Result<Json<BulkDeleteResponse>, StatusCode> {
+) -> Result<Json<BulkDeleteResponse>, ApiError> {
     let runs = collect_runs(&state.store);
     let to_delete: Vec<String> = runs
         .iter()
@@ -548,7 +576,7 @@ async fn api_date_delete(
 async fn api_runs_bulk_delete(
     State(state): State<AppState>,
     Json(req): Json<BulkDeleteRequest>,
-) -> Result<Json<BulkDeleteResponse>, StatusCode> {
+) -> Result<Json<BulkDeleteResponse>, ApiError> {
     let count = req.run_ids.len();
     for run_id in &req.run_ids {
         remove_run_artifacts(&state.store, run_id)?;
@@ -828,20 +856,40 @@ async fn api_logs_stream(
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     // Send buffered history first
     let history: Vec<String> = state.log_buffer.lock().await.iter().cloned().collect();
+    let mut rx = state.log_tx.subscribe();
 
     let stream = async_stream::stream! {
         for line in &history {
             yield Ok(Event::default().event("log").data(line.as_str()));
         }
-        // Then keep connection open (no new events via broadcast for now)
-        // The log buffer is populated by a tracing layer that can be added later
+        // Real-time push from log broadcast channel
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            yield Ok(Event::default().event("ping").data(""));
+            match rx.recv().await {
+                Ok(line) => {
+                    yield Ok(Event::default().event("log").data(line.as_str()));
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    yield Ok(Event::default().event("log").data(format!("... {} messages dropped ...", n)));
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
         }
     };
 
     Sse::new(stream)
+}
+
+// ── Status ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct StatusResponse {
+    pipeline_running: bool,
+}
+
+async fn api_status(State(state): State<AppState>) -> Json<StatusResponse> {
+    Json(StatusResponse {
+        pipeline_running: state.pipeline_running.load(Ordering::SeqCst),
+    })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -950,19 +998,21 @@ fn days_in_month(year: i32, month: u32) -> Option<u32> {
     Some(next_month.pred_opt()?.day())
 }
 
-fn remove_run_artifacts(store: &FileStateStore, run_id: &str) -> Result<(), StatusCode> {
+fn remove_run_artifacts(store: &FileStateStore, run_id: &str) -> Result<(), ApiError> {
     let run_dir = StatePath::new(format!("cache/runs/{}", run_id))
-        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid run id"))?
         .resolve(store.root());
     let report_dir = StatePath::new(format!("cache/reports/{}", run_id))
-        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid run id"))?
         .resolve(store.root());
 
     if run_dir.exists() {
-        std::fs::remove_dir_all(&run_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        std::fs::remove_dir_all(&run_dir)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     if report_dir.exists() {
-        std::fs::remove_dir_all(&report_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        std::fs::remove_dir_all(&report_dir)
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     Ok(())
 }
@@ -1046,8 +1096,8 @@ mod tests {
     fn remove_run_artifacts_rejects_path_traversal() {
         let tmp = tempfile::TempDir::new().unwrap();
         let store = FileStateStore::new(tmp.path().to_path_buf());
-        let err = remove_run_artifacts(&store, "../outside").unwrap_err();
-        assert_eq!(err, StatusCode::BAD_REQUEST);
+        let (status, _) = remove_run_artifacts(&store, "../outside").unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[test]

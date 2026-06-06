@@ -9,11 +9,22 @@ daily-paper/
 ├── Cargo.toml                    # workspace root
 ├── config.example.toml           # 配置模板
 ├── docs/                         # 设计文档
+├── ui/                           # Web UI 前端（Svelte 5 + TypeScript）
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+│       ├── types.ts              # 镜像 Rust 模型的 TS 类型
+│       ├── api.ts                # 类型化 fetch 封装
+│       ├── router.svelte.ts      # Hash 路由
+│       ├── stores/               # SSE 连接管理
+│       ├── components/           # 可复用组件
+│       └── pages/                # 页面组件
 ├── crates/
 │   ├── daily-paper/              # bin crate：CLI 入口 + pipeline 编排
 │   │   └── src/
 │   │       ├── main.rs
 │   │       ├── cli.rs            # clap derive 定义
+│   │       ├── log_layer.rs      # tracing → LogBuffer + broadcast layer
 │   │       ├── progress.rs       # indicatif 进度条 + SSE 推送
 │   │       └── commands/
 │   │           ├── run.rs        # pipeline 主流程
@@ -82,3 +93,4 @@ Pipeline 编排在 bin crate 的 `commands/run.rs` 中，按顺序调用各模�
 - **配置**：直接 API key 字段，dev 模式从 `./config.toml` 加载，release 模式用平台目录
 - **CACHE_KINDS 常量**：单一数据源，list/clean/ensure_dirs 共用
 - **进度指示**：indicatif 驱动 CLI 进度条 + PipelineEvent SSE 推送到 Web UI
+- **Web UI**：静态文件放在 `<data_dir>/ui`，由 `daily-paper serve` 提供；API 契约见 `docs/web-ui.md`

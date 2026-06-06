@@ -20,7 +20,6 @@
 <root>/
 ├── config.toml
 ├── lock                          # 进程锁
-├── runs/                         # RunManifest JSON
 ├── cache/
 │   ├── arxiv/                    # arXiv 候选列表
 │   ├── embeddings/               # embedding 向量 + metadata
@@ -28,7 +27,8 @@
 │   ├── papers/                   # PDF、正文、精读结果
 │   ├── rerank/                   # rerank 结果
 │   ├── reports/                  # 版本化报告（按 run_id）
-│   ├── deliveries/               # 发送记录
+│   ├── runs/                     # RunManifest JSON（按 run_id）
+│   ├── deliveries/history/       # 发送记录
 │   └── zotero/snapshots/         # Zotero 快照
 ├── archive/<date>/               # 每日归档
 │   ├── candidates.json

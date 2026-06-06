@@ -10,7 +10,7 @@ config → zotero_sync → source_fetch → deduplicate → embedding → rerank
 
 每次运行生成一个 run 记录。各阶段写入自己的状态和产物。后续运行根据缓存键、状态表和配置 hash 判断是否复用已有结果。
 
-详见 `project-structure.md`（crate 组织）、`data-model.md`（数据结构）、`state-store.md`（存储设计）。
+详见 `project-structure.md`（crate 组织）、`data-model.md`（数据结构）、`state-store.md`（存储设计）、`web-ui.md`（Web UI 与 API 契约）。
 
 ## 设计目标
 
@@ -22,7 +22,7 @@ config → zotero_sync → source_fetch → deduplicate → embedding → rerank
 
 ## 非目标
 
-- Web UI / 多用户服务（有基础 SSE 推送，但不做完整 Web 应用）
+- 多用户服务、账号系统、远程部署
 - 写回 Zotero
 - 复杂推荐算法
 - SQLite backend
@@ -86,3 +86,5 @@ config → zotero_sync → source_fetch → deduplicate → embedding → rerank
 - tracing：每个 run 一个 root span，每个 stage 一个 child span
 - PipelineEvent 通过 broadcast channel 推送 SSE（StageStart/StageEnd/Progress/Ended）
 - CLI 使用 indicatif 显示进度条和 ETA
+- WebLogLayer 将 tracing 事件桥接到 LogBuffer（历史回放）和 broadcast channel（实时推送）
+- `/api/logs/stream` SSE 端点先发送缓冲历史，再实时推送新日志
