@@ -508,6 +508,105 @@ async fn stage_zotero_sync(
         .await
         .context("failed to fetch Zotero items")?;
 
+    // When incremental sync returns no new items and the library version
+    // hasn't changed, reuse the cached snapshot instead of creating an
+    // empty one that would overwrite the existing data.
+    if since_version.is_some() && items.is_empty() {
+        let versions_match = sync_state.as_ref().and_then(|s| s.library_version) == library_version;
+
+        if versions_match {
+            if let Some(ref state) = sync_state {
+                if let Some(ref snapshot_id) = state.last_snapshot_id {
+                    let snap_path =
+                        StatePath::new(format!("cache/zotero/snapshots/{}.json", snapshot_id))?;
+                    if let Some(snapshot) = store.read_json::<ZoteroSnapshot>(&snap_path)? {
+                        info!(
+                            snapshot_id = %snapshot_id,
+                            paper_count = snapshot.item_count,
+                            library_version = ?library_version,
+                            "Zotero library unchanged, reusing cached snapshot"
+                        );
+                        record.status = StageStatus::Succeeded;
+                        record.cache_hit = true;
+                        record.finished_at = Some(Utc::now());
+                        record.output_ref = Some(snapshot_id.clone());
+                        manifest.stages.push(record);
+                        return Ok(snapshot);
+                    }
+                }
+            }
+            // Cached snapshot missing — fall through to a full sync
+            info!("cached snapshot missing, falling back to full sync");
+            let items = client
+                .fetch_items(None)
+                .await
+                .context("failed to fetch Zotero items (full sync)")?;
+            // Continue with the full items list below
+            // (items variable is shadowed, rest of the pipeline proceeds)
+            return stage_zotero_sync_inner(
+                store,
+                config,
+                manifest,
+                record,
+                sync_state_path,
+                client,
+                library_version,
+                items,
+                date,
+            )
+            .await;
+        }
+        // Library version changed but no items returned — do a full sync
+        info!(
+            old_version = ?sync_state.as_ref().and_then(|s| s.library_version),
+            new_version = ?library_version,
+            "library version changed but no items returned, falling back to full sync"
+        );
+        let items = client
+            .fetch_items(None)
+            .await
+            .context("failed to fetch Zotero items (full sync)")?;
+        return stage_zotero_sync_inner(
+            store,
+            config,
+            manifest,
+            record,
+            sync_state_path,
+            client,
+            library_version,
+            items,
+            date,
+        )
+        .await;
+    }
+
+    stage_zotero_sync_inner(
+        store,
+        config,
+        manifest,
+        record,
+        sync_state_path,
+        client,
+        library_version,
+        items,
+        date,
+    )
+    .await
+}
+
+/// Core snapshot creation logic extracted so both normal and fallback paths
+/// can share it without duplicating 60 lines.
+async fn stage_zotero_sync_inner(
+    store: &FileStateStore,
+    config: &ResolvedConfig,
+    manifest: &mut RunManifest,
+    mut record: StageRecord,
+    sync_state_path: StatePath,
+    client: ZoteroClient,
+    library_version: Option<u64>,
+    items: Vec<serde_json::Value>,
+    date: &str,
+) -> anyhow::Result<ZoteroSnapshot> {
     let collections = client
         .fetch_collections()
         .await
