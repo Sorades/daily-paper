@@ -281,7 +281,7 @@ mod tests {
         let cfg = ResolvedConfig::from_raw(&minimal_raw()).unwrap();
         assert_eq!(cfg.reader.top_n, 10);
         assert_eq!(cfg.reader.language, "zh-CN");
-        assert_eq!(cfg.reader.require_full_text, true);
+        assert!(cfg.reader.require_full_text);
         assert_eq!(cfg.reader.timeout_secs, 120);
         assert_eq!(cfg.reader.max_retries, 5);
         assert_eq!(cfg.reader.max_concurrency, 2);

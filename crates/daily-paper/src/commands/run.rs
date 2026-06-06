@@ -86,7 +86,7 @@ pub async fn execute(data_dir: &Path, args: RunArgs) -> anyhow::Result<()> {
         let source_run_id =
             find_source_run(&store, args.from_run.as_deref(), stage_filter.as_deref())?;
         info!(source_run = %source_run_id, "loading source run for cached data");
-        let manifest_path = StatePath::new(format!("runs/{}/manifest.json", source_run_id))?;
+        let manifest_path = StatePath::new(format!("cache/runs/{}/manifest.json", source_run_id))?;
         let m: Option<RunManifest> = store.read_json(&manifest_path)?;
         if m.is_none() {
             warn!("source run manifest not found, stages will need to re-fetch data");
@@ -1657,7 +1657,8 @@ async fn stage_send(
 
     // Check if already sent
     if !force {
-        let receipt_path = StatePath::new(format!("cache/deliveries/{}.json", delivery_key))?;
+        let receipt_path =
+            StatePath::new(format!("cache/deliveries/history/{}.json", delivery_key))?;
         if store.exists(&receipt_path)? {
             info!("report already sent, skipping (use --force-send to override)");
             record.status = StageStatus::Succeeded;
@@ -1690,7 +1691,7 @@ async fn stage_send(
     .context("failed to send email")?;
 
     // Save delivery receipt
-    let receipt_path = StatePath::new(format!("deliveries/{}.json", delivery_key))?;
+    let receipt_path = StatePath::new(format!("cache/deliveries/history/{}.json", delivery_key))?;
     store.write_json(&receipt_path, &receipt)?;
 
     info!(delivery_key = %delivery_key, "email sent successfully");
@@ -1704,7 +1705,7 @@ async fn stage_send(
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-fn generate_run_id() -> String {
+pub(crate) fn generate_run_id() -> String {
     let now = Local::now();
     let ts = now.format("%Y%m%d-%H%M%S").to_string();
     let suffix: String = (0..6)
@@ -1713,7 +1714,7 @@ fn generate_run_id() -> String {
     format!("{}-{}", ts, suffix)
 }
 
-fn compute_date_window(date_arg: Option<&str>) -> anyhow::Result<DateWindow> {
+pub(crate) fn compute_date_window(date_arg: Option<&str>) -> anyhow::Result<DateWindow> {
     let target_date = match date_arg {
         Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .context(format!("invalid date '{}', expected YYYY-MM-DD", s))?,
@@ -1743,7 +1744,7 @@ fn compute_date_window(date_arg: Option<&str>) -> anyhow::Result<DateWindow> {
     })
 }
 
-fn build_cli_overrides(args: &RunArgs) -> Vec<CliOverride> {
+pub(crate) fn build_cli_overrides(args: &RunArgs) -> Vec<CliOverride> {
     let mut overrides = Vec::new();
     if let Some(ref date) = args.date {
         overrides.push(CliOverride {
@@ -1939,7 +1940,7 @@ fn add_warning(manifest: &mut RunManifest, kind: &str, message: &str) {
     });
 }
 
-fn classify_error(e: &anyhow::Error) -> ErrorKind {
+pub(crate) fn classify_error(e: &anyhow::Error) -> ErrorKind {
     let msg = e.to_string().to_lowercase();
     if msg.contains("pdf") && msg.contains("download") {
         ErrorKind::PdfDownload
@@ -2019,7 +2020,7 @@ fn emit_stage_end<T>(
 
 // ── Cached data loaders for --stage ─────────────────────────────────
 
-fn find_source_run(
+pub(crate) fn find_source_run(
     store: &FileStateStore,
     from_run: Option<&str>,
     stage_filter: Option<&[StageName]>,
