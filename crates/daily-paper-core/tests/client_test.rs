@@ -1,6 +1,6 @@
 mod common;
 
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_json, method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 /// Test Zotero client fetches items correctly.
@@ -282,6 +282,51 @@ async fn test_reader_complete() {
     let usage = usage.unwrap();
     assert_eq!(usage.input_tokens, Some(1500));
     assert_eq!(usage.output_tokens, Some(200));
+}
+
+#[tokio::test]
+async fn test_reader_requests_json_mode() {
+    let server = common::start_mock_server().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_json(serde_json::json!({
+            "model": "test-model",
+            "messages": [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "user prompt"}
+            ],
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "{\"summary\":{\"problem\":\"A\",\"insight\":\"B\",\"method\":\"C\",\"results\":\"D\",\"limitation\":null},\"author_affiliations\":[],\"project_url\":null,\"code_url\":null}"
+                    }
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = daily_paper_core::reader::openai::ReaderClient::new(
+        format!("{}/v1", server.uri()),
+        "test_key".to_string(),
+        "test-model".to_string(),
+        10,
+        2,
+        2,
+        4000,
+    );
+
+    let (content, _) = client
+        .complete("system prompt", "user prompt")
+        .await
+        .unwrap();
+    assert!(content.contains("\"summary\""));
 }
 
 /// Test reader client returns error on 5xx (not retried, LLM errors are not retryable).

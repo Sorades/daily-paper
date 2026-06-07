@@ -17,7 +17,9 @@ use daily_paper_core::models::candidate::CandidatePaper;
 use daily_paper_core::models::common::{sha256_hex, DateWindow};
 use daily_paper_core::models::dedup::{DedupResult, DuplicateReason, ExistingLibraryMatch};
 use daily_paper_core::models::interest::{InterestPaperRef, InterestProfile};
-use daily_paper_core::models::read::{compute_read_cache_key, PaperMetadataSummary, ReadResult};
+use daily_paper_core::models::read::{
+    compute_read_cache_key, PaperMetadataSummary, ReadResult, TokenUsage,
+};
 use daily_paper_core::models::report::{compute_delivery_key, RenderedReport};
 use daily_paper_core::models::run::*;
 use daily_paper_core::models::zotero::ZoteroSnapshot;
@@ -26,7 +28,9 @@ use daily_paper_core::pdf::extract::extract_text;
 use daily_paper_core::pdf::section::{parse_sections, select_sections_for_reading};
 use daily_paper_core::reader::openai::ReaderClient;
 use daily_paper_core::reader::template::{
-    build_system_prompt, build_user_prompt, compute_template_hash, trim_to_token_budget,
+    build_system_prompt, build_tldr_system_prompt, build_tldr_user_prompt, build_user_prompt,
+    compute_template_hash, is_valid_structured_summary, parse_llm_output, parse_tldr_output,
+    trim_to_token_budget,
 };
 use daily_paper_core::render::html::{render_html, ReportPaper};
 use daily_paper_core::render::text::render_text;
@@ -1328,6 +1332,34 @@ async fn stage_rerank(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn generate_tldr_fallback(
+    reader: &ReaderClient,
+    candidate: &CandidatePaper,
+    authors: &str,
+    selected_text: &str,
+    language: &str,
+    max_input_tokens: usize,
+    paper_id: &str,
+) -> anyhow::Result<(String, Option<TokenUsage>)> {
+    let system_prompt = build_tldr_system_prompt();
+    let user_prompt = build_tldr_user_prompt(
+        &candidate.title,
+        &candidate.abstract_text,
+        authors,
+        selected_text,
+        language,
+    );
+    let trimmed_prompt = trim_to_token_budget(&user_prompt, max_input_tokens * 4);
+    let (raw_response, token_usage) = reader
+        .complete(&system_prompt, &trimmed_prompt)
+        .await
+        .with_context(|| format!("TLDR fallback LLM call failed for {}", paper_id))?;
+    let summary = parse_tldr_output(&raw_response)
+        .map_err(|e| anyhow::anyhow!("TLDR fallback returned invalid format: {}", e))?;
+    Ok((summary, token_usage))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn stage_deep_read(
     store: &FileStateStore,
     config: &ResolvedConfig,
@@ -1516,44 +1548,93 @@ async fn stage_deep_read(
             let trimmed_prompt =
                 trim_to_token_budget(&user_prompt, config.reader.max_input_tokens * 4);
 
-            // Call LLM
-            let (raw_response, token_usage) =
-                match reader.complete(&system_prompt, &trimmed_prompt).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!(paper_id = %paper_id, attempt, error = %e, "LLM read failed");
-                        if attempt == max_attempts {
-                            mark_stage_blocked(
-                                manifest,
-                                &format!("LLM read failed for {}: {}", paper_id, e),
+            let structured_result = match reader.complete(&system_prompt, &trimmed_prompt).await {
+                Ok((raw_response, token_usage)) => {
+                    // Parse LLM output strictly; malformed content must not enter the report cache.
+                    match parse_llm_output(&raw_response) {
+                        Ok(parsed) => Some((parsed, token_usage)),
+                        Err(e) => {
+                            warn!(
+                                paper_id = %paper_id,
+                                attempt,
+                                error = %e,
+                                "LLM read returned invalid report format"
                             );
+                            if attempt < max_attempts {
+                                continue;
+                            }
+                            None
                         }
+                    }
+                }
+                Err(e) => {
+                    warn!(paper_id = %paper_id, attempt, error = %e, "LLM read failed");
+                    if attempt < max_attempts {
                         continue;
                     }
-                };
+                    None
+                }
+            };
 
-            // Parse LLM output (JSON with structured summary and affiliations)
-            let parsed = daily_paper_core::reader::template::parse_llm_output(&raw_response);
-            let summary = parsed
-                .as_ref()
-                .map(|p| p.summary.clone())
-                .unwrap_or_else(|| raw_response.clone());
-            let author_affiliations = parsed
-                .as_ref()
-                .map(|p| {
-                    p.author_affiliations
-                        .iter()
-                        .map(|aa| daily_paper_core::models::read::AuthorAffiliation {
-                            name: aa.name.clone(),
-                            affiliation: aa.affiliation.clone(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            // Use LLM-parsed URLs when available (more accurate than source metadata)
-            let llm_project_url = parsed.as_ref().and_then(|p| p.project_url.clone());
-            let llm_code_url = parsed.as_ref().and_then(|p| p.code_url.clone());
+            let (
+                summary,
+                author_affiliations,
+                llm_project_url,
+                llm_code_url,
+                token_usage,
+                warnings,
+            ) = if let Some((parsed, token_usage)) = structured_result {
+                let author_affiliations = parsed
+                    .author_affiliations
+                    .iter()
+                    .map(|aa| daily_paper_core::models::read::AuthorAffiliation {
+                        name: aa.name.clone(),
+                        affiliation: aa.affiliation.clone(),
+                    })
+                    .collect();
+                (
+                    parsed.summary.clone(),
+                    author_affiliations,
+                    parsed.project_url.clone(),
+                    parsed.code_url.clone(),
+                    token_usage,
+                    Vec::new(),
+                )
+            } else {
+                match generate_tldr_fallback(
+                    &reader,
+                    candidate,
+                    &authors_str,
+                    &selected_text,
+                    &config.reader.language,
+                    config.reader.max_input_tokens,
+                    paper_id,
+                )
+                .await
+                {
+                    Ok((summary, token_usage)) => {
+                        warn!(paper_id = %paper_id, "using TLDR fallback for deep read report");
+                        (
+                            summary,
+                            Vec::new(),
+                            None,
+                            None,
+                            token_usage,
+                            vec!["structured_read_failed; used_tldr_fallback".to_string()],
+                        )
+                    }
+                    Err(e) => {
+                        mark_stage_blocked(
+                            manifest,
+                            &format!(
+                                "LLM read failed for {}; TLDR fallback also failed: {}",
+                                paper_id, e
+                            ),
+                        );
+                        continue;
+                    }
+                }
+            };
 
             let read_cache_key = compute_read_cache_key(
                 paper_id,
@@ -1581,7 +1662,7 @@ async fn stage_deep_read(
                 },
                 author_affiliations,
                 token_usage,
-                warnings: Vec::new(),
+                warnings,
             };
 
             // Cache read result
@@ -2061,7 +2142,14 @@ fn find_cached_read_result(
                     && result.model_id == model_id
                     && result.language == language
                 {
-                    return Ok(Some(state_path.as_path().to_string_lossy().to_string()));
+                    if is_valid_structured_summary(&result.summary) {
+                        return Ok(Some(state_path.as_path().to_string_lossy().to_string()));
+                    }
+                    warn!(
+                        paper_id = %paper_id,
+                        path = %state_path.as_path().display(),
+                        "ignoring cached read result with invalid summary format"
+                    );
                 }
             }
         }

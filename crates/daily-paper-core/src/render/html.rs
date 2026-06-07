@@ -34,6 +34,7 @@ fn label_to_tag_class(label: &str) -> &'static str {
         "method" => "tag-method",
         "results" => "tag-results",
         "limitation" => "tag-limitation",
+        "tldr" => "tag-tldr",
         _ => "tag-method",
     }
 }
@@ -250,6 +251,7 @@ header h1 {{
 .tag-method   {{ background: #e0e7ff; color: #3730a3; }}
 .tag-results  {{ background: #d1fae5; color: #065f46; }}
 .tag-limitation {{ background: #fce7d5; color: #9a3412; }}
+.tag-tldr {{ background: #f3f4f6; color: #374151; }}
 .summary-text {{
   color: #374151;
 }}
@@ -482,5 +484,27 @@ mod tests {
         assert_eq!(escape_html("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;");
         assert_eq!(escape_html("a & b"), "a &amp; b");
         assert_eq!(escape_html("it's"), "it&#39;s");
+    }
+
+    #[test]
+    fn format_five_part_summary_as_tags() {
+        let summary = "**Problem**: Agents fail in noisy environments.\n\n**Insight**: Train with noise injection.\n\n**Method**: NoiseAgent adds perturbations.\n\n**Results**: 12% improvement on MMLU.\n\n**Limitation**: Only tested on text tasks.";
+
+        let html = format_summary_html(summary);
+
+        assert!(html.contains("tag-problem"));
+        assert!(html.contains("tag-insight"));
+        assert!(html.contains("tag-method"));
+        assert!(html.contains("tag-results"));
+        assert!(html.contains("tag-limitation"));
+        assert!(html.contains("12% improvement"));
+    }
+
+    #[test]
+    fn format_tldr_summary_as_tag() {
+        let html = format_summary_html("**TLDR**: This is a fallback summary.");
+
+        assert!(html.contains("tag-tldr"));
+        assert!(html.contains("fallback summary"));
     }
 }

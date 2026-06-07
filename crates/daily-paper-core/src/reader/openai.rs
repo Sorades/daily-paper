@@ -97,9 +97,28 @@ impl ReaderClient {
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<(String, Option<TokenUsage>)> {
+        match self
+            .call_api_with_json_mode(system_prompt, user_prompt, true)
+            .await
+        {
+            Err(Error::Llm(e)) if looks_like_unsupported_json_mode(&e) => {
+                warn!("LLM endpoint does not support JSON response_format; retrying without it");
+                self.call_api_with_json_mode(system_prompt, user_prompt, false)
+                    .await
+            }
+            result => result,
+        }
+    }
+
+    async fn call_api_with_json_mode(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        json_mode: bool,
+    ) -> Result<(String, Option<TokenUsage>)> {
         let url = format!("{}/chat/completions", self.base_url);
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -107,6 +126,9 @@ impl ReaderClient {
             ],
             "temperature": 0.3,
         });
+        if json_mode {
+            body["response_format"] = serde_json::json!({"type": "json_object"});
+        }
 
         let resp = self
             .client
@@ -167,4 +189,12 @@ impl ReaderClient {
         debug!(content_len = content.len(), "got LLM response");
         Ok((content, usage))
     }
+}
+
+fn looks_like_unsupported_json_mode(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    (error.contains("400") || error.contains("422"))
+        && (error.contains("response_format")
+            || error.contains("json_object")
+            || error.contains("json mode"))
 }
