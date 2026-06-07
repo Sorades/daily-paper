@@ -53,6 +53,12 @@ struct EmbeddingIndex {
     library_hashes: Vec<(String, f32, String)>,
 }
 
+#[derive(Clone)]
+struct PendingEmbedding {
+    text: String,
+    vec_path: StatePath,
+}
+
 pub async fn execute(data_dir: &Path, args: RunArgs) -> anyhow::Result<()> {
     let config_path = data_dir.join("config.toml");
     let (_raw, resolved) = load_config(&config_path)
@@ -941,15 +947,11 @@ async fn stage_embedding(
     let provider_id = if is_local { "fastembed" } else { "openai" };
     let config_hash = sha256_hex(config.embedding.model.as_bytes());
 
-    let progress = StageProgress::new(StageName::Embedding, 0, event_tx, run_id);
-    progress.inc("checking cache");
+    let mut candidate_embs = Vec::new();
+    let mut candidate_hashes: Vec<(String, String)> = Vec::new();
+    let mut pending_candidates: Vec<(usize, PendingEmbedding)> = Vec::new();
 
-    // Collect all texts that need embedding (candidates + library)
-    let mut all_texts: Vec<String> = Vec::new();
-    let mut candidate_indices: Vec<usize> = Vec::new(); // index into candidates
-    let mut candidate_vec_paths: Vec<StatePath> = Vec::new();
-
-    // Check cache for candidates
+    // Check candidate embedding cache first so interrupted runs can resume from saved .vec files.
     for (i, candidate) in candidates.iter().enumerate() {
         let input_text = make_input_text(&candidate.title, &candidate.abstract_text);
         let input_hash = compute_input_hash(
@@ -961,109 +963,24 @@ async fn stage_embedding(
         let vec_path = StatePath::new(format!("cache/embeddings/{}.vec", input_hash))?;
 
         if let Some(bytes) = store.read_bytes(&vec_path)? {
-            // Already cached, skip
-            let _ = (i, bytes);
-        } else {
-            all_texts.push(input_text);
-            candidate_indices.push(i);
-            candidate_vec_paths.push(vec_path);
-        }
-    }
-
-    // Embed all texts at once using local model
-    let all_embeddings = if is_local && !all_texts.is_empty() {
-        info!(count = all_texts.len(), "embedding with local model");
-        progress.inc(&format!("embedding {} texts (local)", all_texts.len()));
-        let model_name = config.embedding.model.clone();
-        let batch_size = config.embedding.batch_size;
-        let cache_dir = store.root().join("cache").to_path_buf();
-        let texts = all_texts.clone();
-        Some(
-            tokio::task::spawn_blocking(move || {
-                let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
-                    &model_name,
-                    batch_size,
-                    Some(&cache_dir),
-                )?;
-                client.embed_batch(&texts)
-            })
-            .await??,
-        )
-    } else if !is_local && !all_texts.is_empty() {
-        info!(count = all_texts.len(), "embedding with remote API");
-        progress.inc(&format!("embedding {} texts (remote)", all_texts.len()));
-        let client = EmbeddingClient::new(
-            config.embedding.base_url.clone().unwrap_or_default(),
-            config.embedding.api_key.clone().unwrap_or_default(),
-            config.embedding.model.clone(),
-            config.embedding.batch_size,
-            config.embedding.timeout_secs,
-            config.embedding.max_retries,
-            config.embedding.max_concurrency,
-        );
-        Some(client.embed_batch(&all_texts).await?)
-    } else {
-        None
-    };
-
-    // Build candidate embeddings and track hashes
-    let mut candidate_embs = Vec::new();
-    let mut candidate_hashes: Vec<(String, String)> = Vec::new();
-
-    // Add cached candidates
-    for candidate in candidates {
-        let input_text = make_input_text(&candidate.title, &candidate.abstract_text);
-        let input_hash = compute_input_hash(
-            provider_id,
-            &config.embedding.model,
-            &config_hash,
-            &input_text,
-        );
-        let vec_path = StatePath::new(format!("cache/embeddings/{}.vec", input_hash))?;
-
-        if let Some(bytes) = store.read_bytes(&vec_path)? {
-            let vec = bytes_to_vec(&bytes);
-            candidate_embs.push((candidate.paper_id.clone(), vec));
-            candidate_hashes.push((candidate.paper_id.clone(), input_hash.clone()));
-        }
-    }
-
-    // Add newly embedded candidates
-    if let Some(ref embeddings) = all_embeddings {
-        for (idx, &cand_idx) in candidate_indices.iter().enumerate() {
-            let candidate = &candidates[cand_idx];
-            let vec_path = &candidate_vec_paths[idx];
-            store.write_bytes(vec_path, &vec_to_bytes(&embeddings[idx]))?;
-            candidate_embs.push((candidate.paper_id.clone(), embeddings[idx].clone()));
-            // Extract input_hash from vec_path
-            let input_hash = vec_path
-                .as_path()
-                .file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
+            candidate_embs.push((candidate.paper_id.clone(), bytes_to_vec(&bytes)));
             candidate_hashes.push((candidate.paper_id.clone(), input_hash));
+        } else {
+            pending_candidates.push((
+                i,
+                PendingEmbedding {
+                    text: input_text,
+                    vec_path,
+                },
+            ));
         }
     }
-
-    // Sort by original order using HashMap for O(n log n) instead of O(n^2 log n)
-    let index_map: HashMap<&str, usize> = candidates
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.paper_id.as_str(), i))
-        .collect();
-    candidate_embs.sort_by_key(|(paper_id, _)| {
-        index_map
-            .get(paper_id.as_str())
-            .copied()
-            .unwrap_or(usize::MAX)
-    });
 
     // Build interest profile and embed library
     let profile = build_interest_profile(snapshot, &config.zotero.filters);
     let mut library_embs = Vec::new();
     let mut library_hashes: Vec<(String, f32, String)> = Vec::new();
-    let mut uncached_library: Vec<(String, f32, String, StatePath)> = Vec::new(); // (lib_id, weight, text, vec_path)
+    let mut pending_library: Vec<(String, f32, PendingEmbedding)> = Vec::new();
 
     for pref in &profile.papers {
         if let Some(lib_paper) = snapshot
@@ -1087,66 +1004,89 @@ async fn stage_embedding(
                 library_embs.push((pref.library_id.clone(), bytes_to_vec(&bytes), pref.weight));
                 library_hashes.push((pref.library_id.clone(), pref.weight, input_hash));
             } else {
-                uncached_library.push((pref.library_id.clone(), pref.weight, input_text, vec_path));
+                pending_library.push((
+                    pref.library_id.clone(),
+                    pref.weight,
+                    PendingEmbedding {
+                        text: input_text,
+                        vec_path,
+                    },
+                ));
             }
         }
     }
 
-    // Batch embed uncached library papers
-    if !uncached_library.is_empty() {
+    let pending_total = pending_candidates.len() + pending_library.len();
+    let progress = StageProgress::new(StageName::Embedding, pending_total, event_tx, run_id);
+
+    if !pending_candidates.is_empty() {
         info!(
-            count = uncached_library.len(),
-            "embedding uncached library papers"
+            count = pending_candidates.len(),
+            local = is_local,
+            "embedding uncached candidate papers"
         );
-        progress.inc(&format!(
-            "embedding {} library papers",
-            uncached_library.len()
-        ));
-        let texts: Vec<String> = uncached_library
+        let pending: Vec<PendingEmbedding> = pending_candidates
             .iter()
-            .map(|(_, _, t, _)| t.clone())
+            .map(|(_, pending)| pending.clone())
             .collect();
+        let embeddings =
+            embed_and_cache_pending(store, config, is_local, &progress, &pending, "candidates")
+                .await?;
 
-        let embeddings = if is_local {
-            let model_name = config.embedding.model.clone();
-            let batch_size = config.embedding.batch_size;
-            let cache_dir = store.root().join("cache").to_path_buf();
-            tokio::task::spawn_blocking(move || {
-                let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
-                    &model_name,
-                    batch_size,
-                    Some(&cache_dir),
-                )?;
-                client.embed_batch(&texts)
-            })
-            .await??
-        } else {
-            let client = EmbeddingClient::new(
-                config.embedding.base_url.clone().unwrap_or_default(),
-                config.embedding.api_key.clone().unwrap_or_default(),
-                config.embedding.model.clone(),
-                config.embedding.batch_size,
-                config.embedding.timeout_secs,
-                config.embedding.max_retries,
-                config.embedding.max_concurrency,
-            );
-            client.embed_batch(&texts).await?
-        };
-
-        for (i, emb) in embeddings.iter().enumerate() {
-            let (ref lib_id, weight, _, ref vec_path) = uncached_library[i];
-            store.write_bytes(vec_path, &vec_to_bytes(emb))?;
-            library_embs.push((lib_id.clone(), emb.clone(), weight));
-            // Extract input_hash from vec_path
-            let input_hash = vec_path
-                .as_path()
-                .file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            library_hashes.push((lib_id.clone(), weight, input_hash));
+        for (idx, emb) in embeddings.into_iter().enumerate() {
+            let (candidate_idx, pending) = &pending_candidates[idx];
+            let candidate = &candidates[*candidate_idx];
+            candidate_embs.push((candidate.paper_id.clone(), emb));
+            candidate_hashes.push((
+                candidate.paper_id.clone(),
+                input_hash_from_vec_path(&pending.vec_path)?,
+            ));
         }
     }
+
+    if !pending_library.is_empty() {
+        info!(
+            count = pending_library.len(),
+            local = is_local,
+            "embedding uncached library papers"
+        );
+        let pending: Vec<PendingEmbedding> = pending_library
+            .iter()
+            .map(|(_, _, pending)| pending.clone())
+            .collect();
+        let embeddings =
+            embed_and_cache_pending(store, config, is_local, &progress, &pending, "library")
+                .await?;
+
+        for (idx, emb) in embeddings.into_iter().enumerate() {
+            let (lib_id, weight, pending) = &pending_library[idx];
+            library_embs.push((lib_id.clone(), emb, *weight));
+            library_hashes.push((
+                lib_id.clone(),
+                *weight,
+                input_hash_from_vec_path(&pending.vec_path)?,
+            ));
+        }
+    }
+
+    // Sort by original order using HashMap for O(n log n) instead of O(n^2 log n)
+    let index_map: HashMap<&str, usize> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.paper_id.as_str(), i))
+        .collect();
+    candidate_embs.sort_by_key(|(paper_id, _)| {
+        index_map
+            .get(paper_id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+    candidate_hashes.sort_by_key(|(paper_id, _)| {
+        index_map
+            .get(paper_id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
 
     info!(
         candidates = candidate_embs.len(),
@@ -1172,6 +1112,105 @@ async fn stage_embedding(
     manifest.stages.push(record);
 
     Ok((candidate_embs, library_embs))
+}
+
+async fn embed_and_cache_pending(
+    store: &FileStateStore,
+    config: &ResolvedConfig,
+    is_local: bool,
+    progress: &StageProgress,
+    pending: &[PendingEmbedding],
+    label: &str,
+) -> anyhow::Result<Vec<Vec<f32>>> {
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let batch_size = config.embedding.batch_size.max(1);
+
+    if is_local {
+        let model_name = config.embedding.model.clone();
+        let cache_dir = store.root().join("cache").to_path_buf();
+        let store_root = store.root().to_path_buf();
+        let pending = pending.to_vec();
+        let progress = progress.clone();
+        let label = label.to_string();
+
+        return tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Vec<f32>>> {
+            let client = daily_paper_core::embedding::fastembed::LocalEmbeddingClient::new(
+                &model_name,
+                batch_size,
+                Some(&cache_dir),
+            )?;
+            let store = FileStateStore::new(store_root);
+            let mut all_embeddings = Vec::with_capacity(pending.len());
+            let mut saved = 0usize;
+
+            for chunk in pending.chunks(batch_size) {
+                let texts: Vec<String> = chunk.iter().map(|item| item.text.clone()).collect();
+                let embeddings = client.embed_batch(&texts)?;
+                validate_embedding_count(chunk.len(), embeddings.len())?;
+
+                for (item, embedding) in chunk.iter().zip(embeddings.iter()) {
+                    store.write_bytes(&item.vec_path, &vec_to_bytes(embedding))?;
+                    saved += 1;
+                    progress.inc(&format!("{} {}/{}", label, saved, pending.len()));
+                }
+
+                all_embeddings.extend(embeddings);
+            }
+
+            Ok(all_embeddings)
+        })
+        .await?;
+    }
+
+    let client = EmbeddingClient::new(
+        config.embedding.base_url.clone().unwrap_or_default(),
+        config.embedding.api_key.clone().unwrap_or_default(),
+        config.embedding.model.clone(),
+        batch_size,
+        config.embedding.timeout_secs,
+        config.embedding.max_retries,
+        config.embedding.max_concurrency,
+    );
+    let mut all_embeddings = Vec::with_capacity(pending.len());
+    let mut saved = 0usize;
+
+    for chunk in pending.chunks(batch_size) {
+        let texts: Vec<String> = chunk.iter().map(|item| item.text.clone()).collect();
+        let embeddings = client.embed_batch(&texts).await?;
+        validate_embedding_count(chunk.len(), embeddings.len())?;
+
+        for (item, embedding) in chunk.iter().zip(embeddings.iter()) {
+            store.write_bytes(&item.vec_path, &vec_to_bytes(embedding))?;
+            saved += 1;
+            progress.inc(&format!("{} {}/{}", label, saved, pending.len()));
+        }
+
+        all_embeddings.extend(embeddings);
+    }
+
+    Ok(all_embeddings)
+}
+
+fn validate_embedding_count(expected: usize, actual: usize) -> anyhow::Result<()> {
+    if actual != expected {
+        anyhow::bail!(
+            "embedding API returned {} vectors for {} inputs",
+            actual,
+            expected
+        );
+    }
+    Ok(())
+}
+
+fn input_hash_from_vec_path(vec_path: &StatePath) -> anyhow::Result<String> {
+    vec_path
+        .as_path()
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .ok_or_else(|| anyhow::anyhow!("invalid embedding vector path: {}", vec_path))
 }
 
 async fn stage_rerank(

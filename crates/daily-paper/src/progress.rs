@@ -3,6 +3,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 /// Per-stage progress indicator that drives both CLI progress bars
 /// and web SSE `PipelineEvent::Progress` events.
+#[derive(Clone)]
 pub struct StageProgress {
     pb: ProgressBar,
     event_tx: Option<tokio::sync::broadcast::Sender<PipelineEvent>>,
