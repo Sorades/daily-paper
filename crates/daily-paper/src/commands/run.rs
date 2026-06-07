@@ -34,7 +34,7 @@ use daily_paper_core::rerank::cosine::rerank;
 use daily_paper_core::rerank::selection::{
     compute_candidate_set_hash, compute_rerank_cache_key, select_top_n,
 };
-use daily_paper_core::source::arxiv::client::ArxivClient;
+use daily_paper_core::source::arxiv::client::{ArxivBackendKind, ArxivClient};
 use daily_paper_core::state::path::StatePath;
 use daily_paper_core::state::store::FileStateStore;
 use daily_paper_core::zotero::client::ZoteroClient;
@@ -708,14 +708,21 @@ async fn stage_source_fetch(
     let cache_key = {
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
-        hasher.update(b"arxiv:rss:v1");
+        hasher.update(b"arxiv:source:v2");
         hasher.update(date_window.label.as_bytes());
+        hasher.update(date_window.start.to_rfc3339().as_bytes());
+        hasher.update(date_window.end.to_rfc3339().as_bytes());
         for source in &config.sources {
             hasher.update(source.kind.as_bytes());
-            for cat in &source.categories {
+            hasher.update(source.backend.as_bytes());
+            let mut categories = source.categories.clone();
+            categories.sort();
+            for cat in &categories {
                 hasher.update(cat.as_bytes());
             }
             hasher.update([source.include_cross_list as u8]);
+            hasher.update(source.max_results_per_page.to_le_bytes());
+            hasher.update(source.max_pages.to_le_bytes());
         }
         hex::encode(hasher.finalize())
     };
@@ -732,15 +739,36 @@ async fn stage_source_fetch(
     }
 
     let mut all_candidates = Vec::new();
+    let mut warned_rss_date_window = false;
 
     for source in &config.sources {
         if source.kind == "arxiv" {
+            let backend = ArxivBackendKind::parse(&source.backend)
+                .ok_or_else(|| anyhow::anyhow!("unsupported arxiv backend '{}'", source.backend))?;
             info!(
                 categories = ?source.categories,
                 include_cross_list = source.include_cross_list,
+                backend = source.backend,
                 "fetching from arXiv"
             );
-            let client = ArxivClient::new(source.categories.clone(), source.include_cross_list);
+            if backend == ArxivBackendKind::Rss
+                && date_window.label != Local::now().date_naive().to_string()
+                && !warned_rss_date_window
+            {
+                add_warning(
+                    manifest,
+                    "source",
+                    "arXiv RSS does not support historical date queries; returning only items currently present in the RSS feed",
+                );
+                warned_rss_date_window = true;
+            }
+            let client = ArxivClient::with_backend(
+                backend,
+                source.categories.clone(),
+                source.include_cross_list,
+                source.max_results_per_page,
+                source.max_pages,
+            );
             let candidates = client
                 .fetch(date_window.start, date_window.end)
                 .await
@@ -2297,59 +2325,11 @@ fn load_cached_candidates(
     // Try to read from date directory
     let candidates_path = StatePath::new(format!("archive/{}/candidates.json", date))?;
     if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&candidates_path)? {
-        if !candidates.is_empty() {
-            info!(
-                count = candidates.len(),
-                "loaded candidates from date cache"
-            );
-            return Ok(candidates);
-        }
-    }
-
-    // Fallback: find the most recent non-empty arxiv cache file
-    let arxiv_dir = store.root().join("cache/arxiv");
-    if arxiv_dir.exists() {
-        let mut entries: Vec<_> = std::fs::read_dir(&arxiv_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|ext| ext == "json")
-                    .unwrap_or(false)
-            })
-            .collect();
-        entries.sort_by(|a, b| {
-            b.metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                .cmp(
-                    &a.metadata()
-                        .and_then(|m| m.modified())
-                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                )
-        });
-        debug!(count = entries.len(), "found arxiv cache files");
-        for entry in &entries {
-            // Make path relative to store root
-            let relative_path = entry
-                .path()
-                .strip_prefix(store.root())
-                .unwrap_or(&entry.path())
-                .to_string_lossy()
-                .to_string();
-            debug!(path = %relative_path, "checking arxiv cache file");
-            let path = StatePath::new(&relative_path)?;
-            if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&path)? {
-                debug!(count = candidates.len(), "read candidates from cache file");
-                if !candidates.is_empty() {
-                    info!(
-                        count = candidates.len(),
-                        "loaded candidates from arxiv cache"
-                    );
-                    return Ok(candidates);
-                }
-            }
-        }
+        info!(
+            count = candidates.len(),
+            "loaded candidates from date cache"
+        );
+        return Ok(candidates);
     }
 
     Ok(Vec::new())

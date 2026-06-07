@@ -1,6 +1,6 @@
 mod common;
 
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 /// Test Zotero client fetches items correctly.
@@ -106,6 +106,91 @@ async fn test_arxiv_fetch_papers() {
     assert!(papers
         .iter()
         .all(|p| p.source_metadata["announce_type"] == "new"));
+}
+
+/// Test arXiv export backend fetches papers by submittedDate query.
+#[tokio::test]
+async fn test_arxiv_export_fetch_papers() {
+    let server = common::start_mock_server().await;
+    common::setup_arxiv_export_mock(&server).await;
+
+    let client = daily_paper_core::source::arxiv::client::ArxivClient::with_backend(
+        daily_paper_core::source::arxiv::client::ArxivBackendKind::Export,
+        vec!["cs.AI".to_string(), "cs.LG".to_string()],
+        true,
+        1000,
+        3,
+    )
+    .with_export_base_url(&format!("{}/api/query", server.uri()));
+
+    let start = chrono::NaiveDate::from_ymd_opt(2023, 1, 30)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let end = chrono::NaiveDate::from_ymd_opt(2023, 1, 31)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+
+    let papers = client.fetch(start, end).await.unwrap();
+
+    assert_eq!(papers.len(), 1);
+    assert_eq!(papers[0].title, "Export API Paper");
+    assert_eq!(papers[0].arxiv_id, Some("2301.12345".into()));
+    assert_eq!(papers[0].doi, Some("10.48550/arxiv.2301.12345".into()));
+}
+
+/// Test arXiv export backend fails instead of silently truncating over page limit.
+#[tokio::test]
+async fn test_arxiv_export_page_limit_fails() {
+    let server = common::start_mock_server().await;
+    let feed_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2301.12345v1</id>
+    <title>First Page Paper</title>
+    <summary>A test abstract.</summary>
+    <author><name>Alice Smith</name></author>
+    <published>2023-01-30T00:00:00Z</published>
+    <updated>2023-01-31T00:00:00Z</updated>
+    <category term="cs.AI"/>
+    <link href="http://arxiv.org/abs/2301.12345v1" rel="alternate"/>
+  </entry>
+</feed>"#;
+
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .and(query_param("start", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(feed_xml))
+        .mount(&server)
+        .await;
+
+    let client = daily_paper_core::source::arxiv::client::ArxivClient::with_backend(
+        daily_paper_core::source::arxiv::client::ArxivBackendKind::Export,
+        vec!["cs.AI".to_string()],
+        true,
+        1,
+        1,
+    )
+    .with_export_base_url(&format!("{}/api/query", server.uri()));
+
+    let start = chrono::NaiveDate::from_ymd_opt(2023, 1, 30)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let end = chrono::NaiveDate::from_ymd_opt(2023, 1, 31)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+
+    let err = client.fetch(start, end).await.unwrap_err();
+    assert!(err.to_string().contains("page limit"));
 }
 
 /// Test embedding client works correctly.

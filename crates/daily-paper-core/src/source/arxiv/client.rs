@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 use crate::error::{Error, Result};
@@ -9,18 +10,57 @@ use crate::models::candidate::CandidatePaper;
 use super::convert::arxmliv_entry_to_candidate;
 
 const ARXIV_RSS_BASE: &str = "https://rss.arxiv.org/rss";
+const ARXIV_EXPORT_BASE: &str = "https://export.arxiv.org/api/query";
 const USER_AGENT: &str =
     "daily-paper/0.1 (https://github.com/user/daily-paper; mailto:user@example.com)";
+const ARXIV_MIN_INTERVAL: Duration = Duration::from_secs(3);
+static ARXIV_LAST_REQUEST: OnceLock<tokio::sync::Mutex<Option<Instant>>> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArxivBackendKind {
+    Rss,
+    Export,
+}
+
+impl ArxivBackendKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "rss" => Some(Self::Rss),
+            "export" => Some(Self::Export),
+            _ => None,
+        }
+    }
+}
 
 pub struct ArxivClient {
     client: Client,
-    base_url: String,
+    rss_base_url: String,
+    export_base_url: String,
+    backend: ArxivBackendKind,
     categories: Vec<String>,
     include_cross_list: bool,
+    max_results_per_page: usize,
+    max_pages: usize,
 }
 
 impl ArxivClient {
     pub fn new(categories: Vec<String>, include_cross_list: bool) -> Self {
+        Self::with_backend(
+            ArxivBackendKind::Rss,
+            categories,
+            include_cross_list,
+            1000,
+            3,
+        )
+    }
+
+    pub fn with_backend(
+        backend: ArxivBackendKind,
+        categories: Vec<String>,
+        include_cross_list: bool,
+        max_results_per_page: usize,
+        max_pages: usize,
+    ) -> Self {
         let client = Client::builder()
             .user_agent(USER_AGENT)
             .build()
@@ -28,32 +68,48 @@ impl ArxivClient {
 
         Self {
             client,
-            base_url: ARXIV_RSS_BASE.to_string(),
+            rss_base_url: ARXIV_RSS_BASE.to_string(),
+            export_base_url: ARXIV_EXPORT_BASE.to_string(),
+            backend,
             categories,
             include_cross_list,
+            max_results_per_page,
+            max_pages,
         }
     }
 
     /// Override the base URL (for testing with mock servers).
     pub fn with_base_url(mut self, base_url: &str) -> Self {
-        self.base_url = base_url.trim_end_matches('/').to_string();
+        self.rss_base_url = base_url.trim_end_matches('/').to_string();
         self
     }
 
-    /// Fetch papers published in the given date window.
+    /// Override the export API URL (for testing with mock servers).
+    pub fn with_export_base_url(mut self, base_url: &str) -> Self {
+        self.export_base_url = base_url.to_string();
+        self
+    }
+
+    /// Fetch papers for the configured backend.
     pub async fn fetch(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CandidatePaper>> {
+        match self.backend {
+            ArxivBackendKind::Rss => self.fetch_rss(start, end).await,
+            ArxivBackendKind::Export => self.fetch_export(start, end).await,
+        }
+    }
+
+    async fn fetch_rss(
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<CandidatePaper>> {
         let mut all_papers = Vec::new();
 
-        for (i, category) in self.categories.iter().enumerate() {
-            if i > 0 {
-                // Delay between categories to avoid rate limiting
-                debug!(delay_secs = 10, "waiting between categories");
-                tokio::time::sleep(Duration::from_secs(10)).await;
-            }
+        for category in &self.categories {
             let papers = self.fetch_category(category, start, end).await?;
             all_papers.extend(papers);
         }
@@ -72,7 +128,7 @@ impl ArxivClient {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<CandidatePaper>> {
-        let url = format!("{}/{}", self.base_url, category);
+        let url = format!("{}/{}", self.rss_base_url, category);
         debug!(url = %url, "fetching arXiv RSS");
 
         let xml = self.fetch_with_retry(&url).await?;
@@ -82,6 +138,89 @@ impl ArxivClient {
             .iter()
             .filter_map(arxmliv_entry_to_candidate)
             .collect())
+    }
+
+    async fn fetch_export(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CandidatePaper>> {
+        let mut all_entries = Vec::new();
+        let mut start_index = 0usize;
+
+        for page in 0..self.max_pages {
+            let url = self.build_export_url(start, end, start_index);
+            debug!(url = %url, page, "fetching arXiv export API");
+            let xml = self.fetch_with_retry(&url).await?;
+            let feed = parse_arxiv_atom_feed(&xml)?;
+            let raw_count = feed.entries.len();
+            let total_results = feed.total_results.unwrap_or(start_index + raw_count);
+            all_entries.extend(feed.entries);
+
+            if raw_count == 0 || start_index + raw_count >= total_results {
+                break;
+            }
+
+            start_index += self.max_results_per_page;
+            if page + 1 == self.max_pages {
+                return Err(Error::SourceUnavailable(format!(
+                    "arXiv export query exceeded configured page limit (max_pages={}, total_results={}); narrow categories, reduce the date window, or increase max_pages",
+                    self.max_pages, total_results
+                )));
+            }
+        }
+
+        let mut papers: Vec<CandidatePaper> = all_entries
+            .iter()
+            .filter(|entry| self.export_entry_matches_category(entry))
+            .filter_map(arxmliv_entry_to_candidate)
+            .collect();
+        papers.sort_by(|a, b| a.paper_id.cmp(&b.paper_id));
+        papers.dedup_by(|a, b| a.paper_id == b.paper_id);
+
+        debug!(count = papers.len(), "fetched arXiv export papers");
+        Ok(papers)
+    }
+
+    fn build_export_url(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        start_index: usize,
+    ) -> String {
+        let category_query = self
+            .categories
+            .iter()
+            .map(|category| format!("cat:{}", category))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let query = format!(
+            "({}) AND submittedDate:[{} TO {}]",
+            category_query,
+            start.format("%Y%m%d%H%M"),
+            end.format("%Y%m%d%H%M")
+        );
+        format!(
+            "{}?search_query={}&sortBy=submittedDate&sortOrder=ascending&start={}&max_results={}",
+            self.export_base_url,
+            urlencoding::encode(&query),
+            start_index,
+            self.max_results_per_page
+        )
+    }
+
+    fn export_entry_matches_category(&self, entry: &serde_json::Value) -> bool {
+        if self.include_cross_list {
+            return true;
+        }
+
+        entry
+            .get("categories")
+            .and_then(|v| v.as_array())
+            .and_then(|categories| categories.first())
+            .and_then(|v| v.as_str())
+            .map(|primary| self.categories.iter().any(|category| category == primary))
+            .unwrap_or(false)
     }
 
     async fn fetch_with_retry(&self, url: &str) -> Result<String> {
@@ -99,6 +238,8 @@ impl ArxivClient {
                 );
                 tokio::time::sleep(delay).await;
             }
+
+            throttle_arxiv_request().await;
 
             let resp = self
                 .client
@@ -141,6 +282,23 @@ impl ArxivClient {
 
         Err(last_err.unwrap_or_else(|| Error::RetryableNetwork("max retries exceeded".into())))
     }
+}
+
+async fn throttle_arxiv_request() {
+    let limiter = ARXIV_LAST_REQUEST.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut last_request = limiter.lock().await;
+    if let Some(last) = *last_request {
+        let elapsed = last.elapsed();
+        if elapsed < ARXIV_MIN_INTERVAL {
+            let delay = ARXIV_MIN_INTERVAL - elapsed;
+            debug!(
+                delay_secs = delay.as_secs_f32(),
+                "waiting for arXiv rate limit"
+            );
+            tokio::time::sleep(delay).await;
+        }
+    }
+    *last_request = Some(Instant::now());
 }
 
 /// Parse arXiv RSS XML into raw entry data compatible with the Atom converter.
@@ -346,26 +504,26 @@ fn extract_arxiv_id_from_description(description: &str) -> Option<String> {
     rest.split_whitespace().next().map(str::to_string)
 }
 
-/// Parse arXiv Atom feed XML into raw entry data.
-#[cfg(test)]
-fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
-    // We parse the XML and convert to a simplified JSON structure
-    // This uses quick-xml for parsing
+#[derive(Debug, Default)]
+struct ArxivAtomFeed {
+    entries: Vec<serde_json::Value>,
+    total_results: Option<usize>,
+}
+
+/// Parse arXiv Atom XML into raw entry data.
+fn parse_arxiv_atom_feed(xml: &str) -> Result<ArxivAtomFeed> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
-    let mut entries = Vec::new();
+    let mut feed = ArxivAtomFeed::default();
     let mut current_entry: Option<serde_json::Map<String, serde_json::Value>> = None;
-    let mut _current_tag = String::new();
-    let mut current_text = String::new();
+    let mut current_tag: Option<String> = None;
     let mut in_entry = false;
     let mut authors: Vec<serde_json::Value> = Vec::new();
     let mut in_author = false;
-    let mut in_name = false;
-    let mut in_affiliation = false;
     let mut author_name = String::new();
     let mut author_affiliation = String::new();
     let mut categories: Vec<String> = Vec::new();
@@ -378,6 +536,7 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                     "entry" => {
                         in_entry = true;
                         current_entry = Some(serde_json::Map::new());
+                        current_tag = None;
                         authors = Vec::new();
                         categories = Vec::new();
                     }
@@ -386,23 +545,54 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                         author_name = String::new();
                         author_affiliation = String::new();
                     }
-                    "name" if in_author => {
-                        in_name = true;
-                        current_text = String::new();
-                    }
-                    "affiliation" if in_author => {
-                        in_affiliation = true;
-                        current_text = String::new();
-                    }
                     _ if in_entry => {
-                        _current_tag = tag;
-                        current_text = String::new();
+                        current_tag = Some(tag);
                     }
-                    _ => {}
+                    _ => {
+                        current_tag = Some(tag);
+                    }
                 }
             }
             Ok(Event::Text(ref e)) => {
-                current_text = e.unescape().unwrap_or_default().to_string();
+                let text = e.unescape().unwrap_or_default().to_string();
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+
+                if in_entry {
+                    if in_author {
+                        match current_tag.as_deref() {
+                            Some("name") => push_joined(&mut author_name, text, " "),
+                            Some("affiliation") | Some("arxiv:affiliation") => {
+                                push_joined(&mut author_affiliation, text, " ")
+                            }
+                            _ => {}
+                        }
+                    } else if let Some(ref mut entry) = current_entry {
+                        match current_tag.as_deref() {
+                            Some("doi") | Some("arxiv:doi") => {
+                                push_json_text(entry, "doi", text, " ");
+                            }
+                            Some(tag) => {
+                                push_json_text(entry, tag, text, " ");
+                            }
+                            None => {}
+                        }
+                    }
+                } else if current_tag.as_deref() == Some("opensearch:totalResults") {
+                    feed.total_results = text.parse::<usize>().ok();
+                }
+            }
+            Ok(Event::CData(ref e)) if in_entry => {
+                let text = String::from_utf8_lossy(e.as_ref()).trim().to_string();
+                if !text.is_empty() {
+                    if let Some(ref mut entry) = current_entry {
+                        if let Some(tag) = current_tag.as_deref() {
+                            push_json_text(entry, tag, &text, "\n");
+                        }
+                    }
+                }
             }
             Ok(Event::End(ref e)) => {
                 let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
@@ -424,14 +614,13 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                             );
                         }
                         if let Some(entry) = current_entry.take() {
-                            entries.push(serde_json::Value::Object(entry));
+                            feed.entries.push(serde_json::Value::Object(entry));
                         }
                         in_entry = false;
+                        current_tag = None;
                     }
                     "author" if in_entry => {
                         in_author = false;
-                        in_name = false;
-                        in_affiliation = false;
                         if !author_name.is_empty() {
                             let mut author_json = serde_json::json!({"name": author_name});
                             if !author_affiliation.is_empty() {
@@ -441,21 +630,7 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
                             authors.push(author_json);
                         }
                     }
-                    "name" if in_author => {
-                        in_name = false;
-                    }
-                    "affiliation" if in_author => {
-                        in_affiliation = false;
-                    }
-                    "category" if in_entry => {
-                        // Extract from attributes
-                    }
-                    _ if in_entry && !in_author => {
-                        if let Some(ref mut entry) = current_entry {
-                            entry.insert(tag, serde_json::Value::String(current_text.clone()));
-                        }
-                    }
-                    _ => {}
+                    _ => current_tag = None,
                 }
             }
             Ok(Event::Empty(ref e)) => {
@@ -499,20 +674,30 @@ fn parse_arxiv_feed(xml: &str) -> Result<Vec<serde_json::Value>> {
             Err(_) => break,
             _ => {}
         }
-
-        // Handle text accumulation for name and affiliation
-        if in_name && !current_text.is_empty() && in_entry {
-            author_name.push_str(&current_text);
-        }
-        if in_affiliation && !current_text.is_empty() && in_entry {
-            if !author_affiliation.is_empty() {
-                author_affiliation.push(' ');
-            }
-            author_affiliation.push_str(&current_text);
-        }
     }
 
-    Ok(entries)
+    Ok(feed)
+}
+
+fn push_json_text(
+    entry: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    text: &str,
+    sep: &str,
+) {
+    if let Some(existing) = entry.get(field).and_then(|value| value.as_str()) {
+        let joined = if existing.is_empty() {
+            text.to_string()
+        } else {
+            format!("{}{}{}", existing, sep, text)
+        };
+        entry.insert(field.to_string(), serde_json::Value::String(joined));
+    } else {
+        entry.insert(
+            field.to_string(),
+            serde_json::Value::String(text.to_string()),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -538,9 +723,9 @@ mod tests {
   </entry>
 </feed>"#;
 
-        let entries = parse_arxiv_feed(xml).unwrap();
-        assert_eq!(entries.len(), 1);
-        let entry = &entries[0];
+        let feed = parse_arxiv_atom_feed(xml).unwrap();
+        assert_eq!(feed.entries.len(), 1);
+        let entry = &feed.entries[0];
         assert_eq!(entry["title"], "Test Paper Title");
         assert_eq!(entry["summary"], "A test abstract about machine learning.");
     }
@@ -558,8 +743,8 @@ mod tests {
   </entry>
 </feed>"#;
 
-        let entries = parse_arxiv_feed(xml).unwrap();
-        let entry = &entries[0];
+        let feed = parse_arxiv_atom_feed(xml).unwrap();
+        let entry = &feed.entries[0];
         let authors = entry["authors"].as_array().unwrap();
         assert_eq!(authors.len(), 2);
         assert_eq!(authors[0]["name"], "Alice Smith");
@@ -632,5 +817,63 @@ Abstract: Cross listed abstract.</description>
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn parse_atom_feed_reads_total_results_and_arxiv_doi() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+      xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2301.12345v1</id>
+    <title>Test Paper</title>
+    <summary>Abstract.</summary>
+    <author><name>Alice Smith</name><arxiv:affiliation>MIT</arxiv:affiliation></author>
+    <published>2023-01-30T00:00:00Z</published>
+    <updated>2023-01-31T00:00:00Z</updated>
+    <category term="cs.AI"/>
+    <link href="http://arxiv.org/abs/2301.12345v1" rel="alternate"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2301.12345v1" rel="related"/>
+    <arxiv:doi>10.48550/arxiv.2301.12345</arxiv:doi>
+  </entry>
+</feed>"#;
+
+        let feed = parse_arxiv_atom_feed(xml).unwrap();
+
+        assert_eq!(feed.total_results, Some(2));
+        assert_eq!(feed.entries.len(), 1);
+        assert_eq!(feed.entries[0]["doi"], "10.48550/arxiv.2301.12345");
+        assert_eq!(feed.entries[0]["authors"][0]["affiliation"], "MIT");
+    }
+
+    #[test]
+    fn export_url_combines_categories_and_date_window() {
+        let client = ArxivClient::with_backend(
+            ArxivBackendKind::Export,
+            vec!["cs.AI".into(), "cs.LG".into()],
+            true,
+            1000,
+            3,
+        )
+        .with_export_base_url("https://example.test/api/query");
+        let start = chrono::NaiveDate::from_ymd_opt(2023, 1, 30)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let end = chrono::NaiveDate::from_ymd_opt(2023, 1, 31)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+
+        let url = client.build_export_url(start, end, 1000);
+
+        assert!(url.contains("search_query="));
+        assert!(url.contains("submittedDate%3A%5B202301300000%20TO%20202301310000%5D"));
+        assert!(url.contains("start=1000"));
+        assert!(url.contains("max_results=1000"));
     }
 }

@@ -10,7 +10,7 @@ config → zotero_sync → source_fetch → deduplicate → embedding → rerank
 
 每次运行生成一个 run 记录。各阶段写入自己的状态和产物。后续运行根据缓存键、状态表和配置 hash 判断是否复用已有结果。
 
-详见 `project-structure.md`（crate 组织）、`data-model.md`（数据结构）、`state-store.md`（存储设计）、`web-ui.md`（Web UI 与 API 契约）。
+详见 `project-structure.md`（crate 组织）、`data-model.md`（数据结构）、`state-store.md`（存储设计）、`web-ui.md`（Web UI 与 API 契约）、`arxiv-source-design.md`（arXiv source 语义与回填设计）。
 
 ## 设计目标
 
@@ -39,7 +39,7 @@ config → zotero_sync → source_fetch → deduplicate → embedding → rerank
 
 ### 论文源
 
-从 arXiv RSS 获取候选论文，归一化为内部 `CandidatePaper`。支持 category 订阅和 cross-list 配置。
+从 arXiv 获取候选论文，归一化为内部 `CandidatePaper`。默认 RSS 只承担每日更新语义；历史回填需要使用显式支持 date-window 的 backend。支持 category 订阅和 cross-list 配置。
 
 ### 去重
 

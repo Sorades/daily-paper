@@ -21,8 +21,14 @@ exclude = true
 
 [[sources]]
 kind = "arxiv"
+backend = "rss"
 categories = ["cs.AI", "cs.CL", "cs.LG"]
 include_cross_list = false
+
+# Historical backfill can use arXiv export search explicitly:
+# backend = "export"
+# max_results_per_page = 1000
+# max_pages = 3
 
 [embedding]
 # kind: "openai-compatible" 或 "fastembed"

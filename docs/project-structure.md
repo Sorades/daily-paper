@@ -41,7 +41,7 @@ daily-paper/
 │           ├── state/            # 文件锁、原子写入、路径安全、存储
 │           ├── models/           # 纯数据模型
 │           ├── zotero/           # Zotero API + 转换 + 兴趣画像
-│           ├── source/arxiv/     # arXiv RSS + 转换
+│           ├── source/arxiv/     # arXiv RSS/export + 转换
 │           ├── embedding/        # OpenAI-compatible + fastembed 本地
 │           ├── rerank/           # 余弦相似度 + Top-N 选择
 │           ├── pdf/              # 下载、pdftotext 提取、章节解析

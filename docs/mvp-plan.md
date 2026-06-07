@@ -9,7 +9,7 @@
 - TOML 配置加载与校验（`config/`）
 - 文件系统 StateStore（`state/`）
 - Zotero 增量同步 + snapshot（`zotero/`）
-- arXiv RSS source（`source/arxiv/`）
+- arXiv source（RSS/export backend，`source/arxiv/`）
 - OpenAI-compatible embedding + fastembed 本地（`embedding/`）
 - 余弦相似度 reranker + Top-N（`rerank/`）
 - PDF 下载 + pdftotext 提取 + 章节解析（`pdf/`）

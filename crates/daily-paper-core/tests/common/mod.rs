@@ -4,7 +4,7 @@ use daily_paper_core::config::{
     ResolvedWebConfig, ResolvedZoteroConfig,
 };
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Start a mock HTTP server and return it.
@@ -44,6 +44,20 @@ pub async fn setup_arxiv_mock(server: &MockServer) {
 
     Mock::given(method("GET"))
         .and(path("/rss/cs.AI"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(feed_xml))
+        .mount(server)
+        .await;
+}
+
+/// Set up arXiv export API mock.
+#[allow(dead_code)]
+pub async fn setup_arxiv_export_mock(server: &MockServer) {
+    let feed_xml = include_str!("../fixtures/arxiv_export_feed.xml");
+
+    Mock::given(method("GET"))
+        .and(path("/api/query"))
+        .and(query_param("start", "0"))
+        .and(query_param("max_results", "1000"))
         .respond_with(ResponseTemplate::new(200).set_body_string(feed_xml))
         .mount(server)
         .await;
@@ -135,8 +149,11 @@ pub fn make_test_config(mock_server_url: &str) -> ResolvedConfig {
         },
         sources: vec![ResolvedSourceConfig {
             kind: "arxiv".to_string(),
+            backend: "rss".to_string(),
             categories: vec!["cs.AI".to_string()],
             include_cross_list: false,
+            max_results_per_page: 1000,
+            max_pages: 3,
         }],
         embedding: ResolvedEmbeddingConfig {
             kind: "openai-compatible".to_string(),
