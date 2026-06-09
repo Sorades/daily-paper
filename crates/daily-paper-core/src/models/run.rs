@@ -49,7 +49,6 @@ pub struct StageRecord {
 pub enum StageName {
     ZoteroSync,
     SourceFetch,
-    Deduplicate,
     Embedding,
     Rerank,
     PdfFetch,
@@ -66,7 +65,6 @@ impl StageName {
         match s {
             "zotero-sync" => Some(Self::ZoteroSync),
             "source-fetch" => Some(Self::SourceFetch),
-            "deduplicate" => Some(Self::Deduplicate),
             "embedding" => Some(Self::Embedding),
             "rerank" => Some(Self::Rerank),
             "pdf-fetch" => Some(Self::PdfFetch),
@@ -84,7 +82,6 @@ impl StageName {
         match self {
             Self::ZoteroSync => "zotero-sync",
             Self::SourceFetch => "source-fetch",
-            Self::Deduplicate => "deduplicate",
             Self::Embedding => "embedding",
             Self::Rerank => "rerank",
             Self::PdfFetch => "pdf-fetch",
@@ -101,7 +98,6 @@ impl StageName {
         &[
             Self::ZoteroSync,
             Self::SourceFetch,
-            Self::Deduplicate,
             Self::Embedding,
             Self::Rerank,
             Self::DeepRead,
@@ -115,21 +111,14 @@ impl StageName {
         match self {
             Self::ZoteroSync => vec![],
             Self::SourceFetch => vec![Self::ZoteroSync],
-            Self::Deduplicate => vec![Self::ZoteroSync, Self::SourceFetch],
-            Self::Embedding => vec![Self::ZoteroSync, Self::SourceFetch, Self::Deduplicate],
+            Self::Embedding => vec![Self::ZoteroSync, Self::SourceFetch],
             Self::Rerank => {
-                vec![
-                    Self::ZoteroSync,
-                    Self::SourceFetch,
-                    Self::Deduplicate,
-                    Self::Embedding,
-                ]
+                vec![Self::ZoteroSync, Self::SourceFetch, Self::Embedding]
             }
             Self::PdfFetch | Self::TextExtract | Self::MetadataFetch | Self::DeepRead => {
                 vec![
                     Self::ZoteroSync,
                     Self::SourceFetch,
-                    Self::Deduplicate,
                     Self::Embedding,
                     Self::Rerank,
                 ]
@@ -138,7 +127,6 @@ impl StageName {
                 vec![
                     Self::ZoteroSync,
                     Self::SourceFetch,
-                    Self::Deduplicate,
                     Self::Embedding,
                     Self::Rerank,
                     Self::DeepRead,
@@ -148,7 +136,6 @@ impl StageName {
                 vec![
                     Self::ZoteroSync,
                     Self::SourceFetch,
-                    Self::Deduplicate,
                     Self::Embedding,
                     Self::Rerank,
                     Self::DeepRead,
@@ -258,7 +245,7 @@ mod tests {
     #[test]
     fn all_stages_in_order() {
         let all = StageName::all();
-        assert_eq!(all.len(), 8);
+        assert_eq!(all.len(), 7);
         assert_eq!(all[0], StageName::ZoteroSync);
         assert_eq!(all[all.len() - 1], StageName::Send);
     }
@@ -273,7 +260,6 @@ mod tests {
         let req = StageName::Send.required_stages();
         assert!(req.contains(&StageName::ZoteroSync));
         assert!(req.contains(&StageName::SourceFetch));
-        assert!(req.contains(&StageName::Deduplicate));
         assert!(req.contains(&StageName::Embedding));
         assert!(req.contains(&StageName::Rerank));
         assert!(req.contains(&StageName::DeepRead));
@@ -285,7 +271,6 @@ mod tests {
         let req = StageName::Embedding.required_stages();
         assert!(req.contains(&StageName::ZoteroSync));
         assert!(req.contains(&StageName::SourceFetch));
-        assert!(req.contains(&StageName::Deduplicate));
         assert!(!req.contains(&StageName::Rerank));
     }
 

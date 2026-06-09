@@ -189,7 +189,7 @@ async fn test_arxiv_export_page_limit_fails() {
         .unwrap()
         .and_utc();
 
-    let err = client.fetch(start, end).await.unwrap_err();
+    let err = client.fetch_export(Some((start, end))).await.unwrap_err();
     assert!(err.to_string().contains("page limit"));
 }
 

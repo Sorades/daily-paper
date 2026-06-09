@@ -44,7 +44,6 @@ pub struct ResolvedZoteroFilter {
 #[derive(Debug, Clone)]
 pub struct ResolvedSourceConfig {
     pub kind: String,
-    pub backend: String,
     pub categories: Vec<String>,
     pub include_cross_list: bool,
     pub max_results_per_page: usize,
@@ -143,7 +142,6 @@ impl ResolvedConfig {
                 .iter()
                 .map(|s| ResolvedSourceConfig {
                     kind: s.kind.clone(),
-                    backend: s.backend.clone().unwrap_or_default(),
                     categories: s.categories.clone(),
                     include_cross_list: s.include_cross_list.unwrap_or(false),
                     max_results_per_page: s.max_results_per_page.unwrap_or(1000),
@@ -250,7 +248,6 @@ mod tests {
             },
             sources: vec![SourceConfig {
                 kind: "arxiv".into(),
-                backend: Some("rss".into()),
                 categories: vec!["cs.AI".into()],
                 include_cross_list: None,
                 max_results_per_page: None,

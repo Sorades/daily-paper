@@ -7,7 +7,6 @@ export type StageStatus = 'Pending' | 'Running' | 'Succeeded' | 'Failed' | 'Skip
 export type StageName =
   | 'ZoteroSync'
   | 'SourceFetch'
-  | 'Deduplicate'
   | 'Embedding'
   | 'Rerank'
   | 'PdfFetch'

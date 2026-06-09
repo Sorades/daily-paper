@@ -104,7 +104,6 @@ fn show_run(store: &FileStateStore, run_id: &str) -> anyhow::Result<()> {
             let stage_name = match stage.stage {
                 StageName::ZoteroSync => "ZoteroSync   ",
                 StageName::SourceFetch => "SourceFetch  ",
-                StageName::Deduplicate => "Deduplicate  ",
                 StageName::Embedding => "Embedding    ",
                 StageName::Rerank => "Rerank       ",
                 StageName::PdfFetch => "PdfFetch     ",

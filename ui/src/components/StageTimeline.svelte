@@ -11,7 +11,7 @@
 
   // Pipeline stage order for display
   const STAGE_ORDER: string[] = [
-    'ZoteroSync', 'SourceFetch', 'Deduplicate', 'Embedding',
+    'ZoteroSync', 'SourceFetch', 'Embedding',
     'Rerank', 'PdfFetch', 'TextExtract', 'MetadataFetch',
     'DeepRead', 'Render', 'Send',
   ]

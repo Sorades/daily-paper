@@ -8,7 +8,6 @@
   const ALL_STAGES: { value: string; label: string }[] = [
     { value: 'zotero-sync', label: 'Zotero Sync' },
     { value: 'source-fetch', label: 'Source Fetch' },
-    { value: 'deduplicate', label: 'Deduplicate' },
     { value: 'embedding', label: 'Embedding' },
     { value: 'rerank', label: 'Rerank' },
     { value: 'deep-read', label: 'Deep Read' },

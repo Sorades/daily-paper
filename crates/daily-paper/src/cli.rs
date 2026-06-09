@@ -90,7 +90,7 @@ pub struct RunArgs {
     pub date: Option<String>,
 
     /// Run only specific stage(s). Can be repeated.
-    /// Stages: zotero-sync, source-fetch, deduplicate, embedding, rerank, deep-read, render, send
+    /// Stages: zotero-sync, source-fetch, embedding, rerank, deep-read, render, send
     #[arg(long = "stage")]
     pub stages: Vec<String>,
 

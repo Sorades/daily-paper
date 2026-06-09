@@ -149,7 +149,6 @@ pub fn make_test_config(mock_server_url: &str) -> ResolvedConfig {
         },
         sources: vec![ResolvedSourceConfig {
             kind: "arxiv".to_string(),
-            backend: "rss".to_string(),
             categories: vec!["cs.AI".to_string()],
             include_cross_list: false,
             max_results_per_page: 1000,

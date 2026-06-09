@@ -17,19 +17,6 @@ pub fn validate(raw: &RawConfig) -> Result<()> {
             return Err(Error::Config("source.kind is required".into()));
         }
         if source.kind == "arxiv" {
-            let backend = source.backend.as_deref().unwrap_or("").trim();
-            if backend.is_empty() {
-                return Err(Error::Config(
-                    "sources.backend is required for arxiv sources; use \"rss\" or \"export\""
-                        .into(),
-                ));
-            }
-            if backend != "rss" && backend != "export" {
-                return Err(Error::Config(format!(
-                    "unsupported arxiv backend '{}'; expected \"rss\" or \"export\"",
-                    backend
-                )));
-            }
             if source.categories.is_empty() {
                 return Err(Error::Config(
                     "sources.categories must not be empty for arxiv sources".into(),
@@ -97,7 +84,6 @@ mod tests {
             },
             sources: vec![SourceConfig {
                 kind: "arxiv".into(),
-                backend: Some("rss".into()),
                 categories: vec!["cs.AI".into()],
                 include_cross_list: None,
                 max_results_per_page: None,
@@ -166,27 +152,6 @@ mod tests {
         let mut raw = valid_raw();
         raw.sources = vec![];
         assert!(validate(&raw).is_err());
-    }
-
-    #[test]
-    fn arxiv_source_requires_backend() {
-        let mut raw = valid_raw();
-        raw.sources[0].backend = None;
-        assert!(validate(&raw).is_err());
-    }
-
-    #[test]
-    fn arxiv_source_rejects_unknown_backend() {
-        let mut raw = valid_raw();
-        raw.sources[0].backend = Some("unknown".into());
-        assert!(validate(&raw).is_err());
-    }
-
-    #[test]
-    fn arxiv_export_accepts_page_defaults() {
-        let mut raw = valid_raw();
-        raw.sources[0].backend = Some("export".into());
-        assert!(validate(&raw).is_ok());
     }
 
     #[test]

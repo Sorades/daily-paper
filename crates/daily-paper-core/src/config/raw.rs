@@ -31,7 +31,6 @@ pub struct ZoteroFilterConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SourceConfig {
     pub kind: String,
-    pub backend: Option<String>,
     pub categories: Vec<String>,
     pub include_cross_list: Option<bool>,
     pub max_results_per_page: Option<usize>,

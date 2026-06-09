@@ -2,6 +2,7 @@
 /.git-store/
 /.daily-paper/
 /.claude/
+/.codex/
 /dev/state/
 .envrc
 /ui/node_modules/

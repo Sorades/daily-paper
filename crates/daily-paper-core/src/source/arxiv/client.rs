@@ -91,6 +91,13 @@ impl ArxivClient {
     }
 
     /// Fetch papers for the configured backend.
+    ///
+    /// For the Export backend, `submittedDate` in the arXiv API is submission
+    /// date, NOT announcement date. A paper submitted on day X may be announced
+    /// on day X+1. To avoid missing papers, Export always fetches the latest
+    /// results (no date filter) and lets the caller filter.
+    ///
+    /// RSS backend filters by `pubDate` (announcement date) directly.
     pub async fn fetch(
         &self,
         start: DateTime<Utc>,
@@ -98,7 +105,23 @@ impl ArxivClient {
     ) -> Result<Vec<CandidatePaper>> {
         match self.backend {
             ArxivBackendKind::Rss => self.fetch_rss(start, end).await,
-            ArxivBackendKind::Export => self.fetch_export(start, end).await,
+            // Export: always fetch latest; submittedDate ≠ announcement date
+            ArxivBackendKind::Export => self.fetch_export(None).await,
+        }
+    }
+
+    /// Fetch the latest available items without applying a submittedDate window.
+    pub async fn fetch_latest(&self) -> Result<Vec<CandidatePaper>> {
+        match self.backend {
+            ArxivBackendKind::Rss => {
+                let now = Utc::now();
+                self.fetch_rss(
+                    now - chrono::Duration::days(14),
+                    now + chrono::Duration::days(1),
+                )
+                .await
+            }
+            ArxivBackendKind::Export => self.fetch_export(None).await,
         }
     }
 
@@ -140,16 +163,16 @@ impl ArxivClient {
             .collect())
     }
 
-    async fn fetch_export(
+    pub async fn fetch_export(
         &self,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        date_window: Option<(DateTime<Utc>, DateTime<Utc>)>,
     ) -> Result<Vec<CandidatePaper>> {
         let mut all_entries = Vec::new();
         let mut start_index = 0usize;
+        let date_filtered = date_window.is_some();
 
         for page in 0..self.max_pages {
-            let url = self.build_export_url(start, end, start_index);
+            let url = self.build_export_url(date_window, start_index);
             debug!(url = %url, page, "fetching arXiv export API");
             let xml = self.fetch_with_retry(&url).await?;
             let feed = parse_arxiv_atom_feed(&xml)?;
@@ -163,8 +186,19 @@ impl ArxivClient {
 
             start_index += self.max_results_per_page;
             if page + 1 == self.max_pages {
+                if !date_filtered {
+                    warn!(
+                        max_pages = self.max_pages,
+                        total_fetched = all_entries.len(),
+                        "arXiv export query hit page limit without date filter; \
+                         results may be incomplete"
+                    );
+                    break;
+                }
                 return Err(Error::SourceUnavailable(format!(
-                    "arXiv export query exceeded configured page limit (max_pages={}, total_results={}); narrow categories, reduce the date window, or increase max_pages",
+                    "arXiv export query exceeded configured page limit \
+                     (max_pages={}, total_results={}); narrow categories, \
+                     reduce the date window, or increase max_pages",
                     self.max_pages, total_results
                 )));
             }
@@ -184,8 +218,7 @@ impl ArxivClient {
 
     fn build_export_url(
         &self,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        date_window: Option<(DateTime<Utc>, DateTime<Utc>)>,
         start_index: usize,
     ) -> String {
         let category_query = self
@@ -194,16 +227,24 @@ impl ArxivClient {
             .map(|category| format!("cat:{}", category))
             .collect::<Vec<_>>()
             .join(" OR ");
-        let query = format!(
-            "({}) AND submittedDate:[{} TO {}]",
-            category_query,
-            start.format("%Y%m%d%H%M"),
-            end.format("%Y%m%d%H%M")
-        );
+        let (query, sort_order) = if let Some((start, end)) = date_window {
+            (
+                format!(
+                    "({}) AND submittedDate:[{} TO {}]",
+                    category_query,
+                    start.format("%Y%m%d%H%M"),
+                    end.format("%Y%m%d%H%M")
+                ),
+                "ascending",
+            )
+        } else {
+            (format!("({})", category_query), "descending")
+        };
         format!(
-            "{}?search_query={}&sortBy=submittedDate&sortOrder=ascending&start={}&max_results={}",
+            "{}?search_query={}&sortBy=submittedDate&sortOrder={}&start={}&max_results={}",
             self.export_base_url,
             urlencoding::encode(&query),
+            sort_order,
             start_index,
             self.max_results_per_page
         )
@@ -212,6 +253,11 @@ impl ArxivClient {
     fn export_entry_matches_category(&self, entry: &serde_json::Value) -> bool {
         if self.include_cross_list {
             return true;
+        }
+
+        // Prefer primary_category (set by arXiv Atom feed) over categories array
+        if let Some(primary) = entry.get("primary_category").and_then(|v| v.as_str()) {
+            return self.categories.iter().any(|category| category == primary);
         }
 
         entry
@@ -527,6 +573,7 @@ fn parse_arxiv_atom_feed(xml: &str) -> Result<ArxivAtomFeed> {
     let mut author_name = String::new();
     let mut author_affiliation = String::new();
     let mut categories: Vec<String> = Vec::new();
+    let mut primary_category: Option<String> = None;
 
     loop {
         match reader.read_event() {
@@ -539,6 +586,7 @@ fn parse_arxiv_atom_feed(xml: &str) -> Result<ArxivAtomFeed> {
                         current_tag = None;
                         authors = Vec::new();
                         categories = Vec::new();
+                        primary_category = None;
                     }
                     "author" if in_entry => {
                         in_author = true;
@@ -612,6 +660,12 @@ fn parse_arxiv_atom_feed(xml: &str) -> Result<ArxivAtomFeed> {
                                         .collect(),
                                 ),
                             );
+                            if let Some(ref pc) = primary_category {
+                                entry.insert(
+                                    "primary_category".into(),
+                                    serde_json::Value::String(pc.clone()),
+                                );
+                            }
                         }
                         if let Some(entry) = current_entry.take() {
                             feed.entries.push(serde_json::Value::Object(entry));
@@ -643,6 +697,15 @@ fn parse_arxiv_atom_feed(xml: &str) -> Result<ArxivAtomFeed> {
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if key == "term" {
                                     categories.push(val);
+                                }
+                            }
+                        }
+                        "arxiv:primary_category" => {
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if key == "term" {
+                                    primary_category = Some(val);
                                 }
                             }
                         }
@@ -869,11 +932,31 @@ Abstract: Cross listed abstract.</description>
             .unwrap()
             .and_utc();
 
-        let url = client.build_export_url(start, end, 1000);
+        let url = client.build_export_url(Some((start, end)), 1000);
 
         assert!(url.contains("search_query="));
         assert!(url.contains("submittedDate%3A%5B202301300000%20TO%20202301310000%5D"));
+        assert!(url.contains("sortOrder=ascending"));
         assert!(url.contains("start=1000"));
         assert!(url.contains("max_results=1000"));
+    }
+
+    #[test]
+    fn export_url_without_date_fetches_latest() {
+        let client = ArxivClient::with_backend(
+            ArxivBackendKind::Export,
+            vec!["cs.AI".into(), "cs.LG".into()],
+            true,
+            1000,
+            3,
+        )
+        .with_export_base_url("https://example.test/api/query");
+
+        let url = client.build_export_url(None, 0);
+
+        assert!(url.contains("search_query="));
+        assert!(!url.contains("submittedDate%3A"));
+        assert!(url.contains("sortOrder=descending"));
+        assert!(url.contains("cat%3Acs.AI%20OR%20cat%3Acs.LG"));
     }
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
-use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
+use chrono::{Duration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -82,7 +82,7 @@ pub async fn execute(data_dir: &Path, args: RunArgs) -> anyhow::Result<()> {
         for s in &args.stages {
             let stage = StageName::from_kebab(s).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown stage '{}'. Valid: zotero-sync, source-fetch, deduplicate, embedding, rerank, deep-read, render, send",
+                    "unknown stage '{}'. Valid: zotero-sync, source-fetch, embedding, rerank, deep-read, render, send",
                     s
                 )
             })?;
@@ -226,36 +226,22 @@ pub async fn run_pipeline(
         load_cached_snapshot(store, cache_date, source_manifest)?
     };
 
-    // Stage 2: Source fetch
-    let candidates = if should_run(&StageName::SourceFetch) {
+    // Stage 2: Source fetch (includes dedup)
+    let mut dedup = if should_run(&StageName::SourceFetch) {
         emit_event(event_tx, run_id, StageName::SourceFetch, true);
-        let r = stage_source_fetch(store, config, manifest, date_window).await;
+        let r = stage_source_fetch(
+            store,
+            config,
+            manifest,
+            date_window,
+            args.date.is_some(),
+            &snapshot,
+            run_id,
+        )
+        .await;
         emit_stage_end(event_tx, manifest, run_id, StageName::SourceFetch, &r);
         let _ = store.write_json(manifest_path, manifest);
         completed_stages.push(StageName::SourceFetch);
-        let candidates = r?;
-        if all_requested_done(&completed_stages, stage_filter) {
-            info!("all requested stages completed");
-            return Ok(());
-        }
-        candidates
-    } else {
-        load_cached_candidates(store, cache_date, source_manifest)?
-    };
-
-    if candidates.is_empty() {
-        warn!("no candidate papers found for date window");
-        add_warning(manifest, "source", "no candidate papers found");
-        return Ok(());
-    }
-
-    // Stage 3: Deduplicate
-    let mut dedup = if should_run(&StageName::Deduplicate) {
-        emit_event(event_tx, run_id, StageName::Deduplicate, true);
-        let r = stage_deduplicate(store, manifest, run_id, &candidates, &snapshot, date).await;
-        emit_stage_end(event_tx, manifest, run_id, StageName::Deduplicate, &r);
-        let _ = store.write_json(manifest_path, manifest);
-        completed_stages.push(StageName::Deduplicate);
         let dedup = r?;
         if all_requested_done(&completed_stages, stage_filter) {
             info!("all requested stages completed");
@@ -263,12 +249,12 @@ pub async fn run_pipeline(
         }
         dedup
     } else {
-        load_cached_dedup(store, cache_date, &candidates, &snapshot)?
+        load_cached_candidates(store, cache_date)?
     };
 
     if dedup.candidates.is_empty() {
-        warn!("all candidates were duplicates");
-        add_warning(manifest, "dedup", "all candidates were duplicates");
+        warn!("no candidate papers found after dedup");
+        add_warning(manifest, "source", "no candidate papers found");
         return Ok(());
     }
 
@@ -694,7 +680,10 @@ async fn stage_source_fetch(
     config: &ResolvedConfig,
     manifest: &mut RunManifest,
     date_window: &DateWindow,
-) -> anyhow::Result<Vec<CandidatePaper>> {
+    date_explicit: bool,
+    snapshot: &ZoteroSnapshot,
+    run_id: &str,
+) -> anyhow::Result<DedupResult> {
     let date = &date_window.label;
     let stage_start = Utc::now();
     let mut record = StageRecord {
@@ -708,64 +697,26 @@ async fn stage_source_fetch(
         error: None,
     };
 
-    // Compute cache key from date window + source config
-    let cache_key = {
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(b"arxiv:source:v2");
-        hasher.update(date_window.label.as_bytes());
-        hasher.update(date_window.start.to_rfc3339().as_bytes());
-        hasher.update(date_window.end.to_rfc3339().as_bytes());
-        for source in &config.sources {
-            hasher.update(source.kind.as_bytes());
-            hasher.update(source.backend.as_bytes());
-            let mut categories = source.categories.clone();
-            categories.sort();
-            for cat in &categories {
-                hasher.update(cat.as_bytes());
-            }
-            hasher.update([source.include_cross_list as u8]);
-            hasher.update(source.max_results_per_page.to_le_bytes());
-            hasher.update(source.max_pages.to_le_bytes());
-        }
-        hex::encode(hasher.finalize())
-    };
-    let cache_path = StatePath::new(format!("cache/arxiv/{}.json", cache_key))?;
-
-    // Check cache
-    if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&cache_path)? {
-        info!(count = candidates.len(), "using cached arXiv results");
-        record.status = StageStatus::Succeeded;
-        record.cache_hit = true;
-        record.finished_at = Some(Utc::now());
-        manifest.stages.push(record);
-        return Ok(candidates);
-    }
-
     let mut all_candidates = Vec::new();
-    let mut warned_rss_date_window = false;
+
+    // RSS for today's papers (pubDate = announcement date),
+    // Export for historical queries (submittedDate query).
+    let today = default_arxiv_announcement_date().to_string();
+    let use_rss = !date_explicit || date_window.label == today;
 
     for source in &config.sources {
         if source.kind == "arxiv" {
-            let backend = ArxivBackendKind::parse(&source.backend)
-                .ok_or_else(|| anyhow::anyhow!("unsupported arxiv backend '{}'", source.backend))?;
+            let backend = if use_rss {
+                ArxivBackendKind::Rss
+            } else {
+                ArxivBackendKind::Export
+            };
             info!(
                 categories = ?source.categories,
                 include_cross_list = source.include_cross_list,
-                backend = source.backend,
+                backend = ?backend,
                 "fetching from arXiv"
             );
-            if backend == ArxivBackendKind::Rss
-                && date_window.label != Local::now().date_naive().to_string()
-                && !warned_rss_date_window
-            {
-                add_warning(
-                    manifest,
-                    "source",
-                    "arXiv RSS does not support historical date queries; returning only items currently present in the RSS feed",
-                );
-                warned_rss_date_window = true;
-            }
             let client = ArxivClient::with_backend(
                 backend,
                 source.categories.clone(),
@@ -783,47 +734,59 @@ async fn stage_source_fetch(
         }
     }
 
-    // Deduplicate by paper_id
+    // Filter by published_at to keep only recent papers.
+    // For Export backend, `published_at` is submission date (not announcement date),
+    // so we use a wider window to catch papers submitted a few days before announcement.
+    // For RSS backend, this is already filtered by pubDate in the parser.
+    let before_filter = all_candidates.len();
+    let cutoff = date_window.start - chrono::Duration::days(2);
+    all_candidates.retain(|c| c.published_at.map(|p| p >= cutoff).unwrap_or(false));
+    if all_candidates.len() < before_filter {
+        info!(
+            before = before_filter,
+            after = all_candidates.len(),
+            "filtered candidates by published_at (last 2 days)"
+        );
+    }
+
+    // Deduplicate by paper_id across sources
     all_candidates.sort_by(|a, b| a.paper_id.cmp(&b.paper_id));
     all_candidates.dedup_by(|a, b| a.paper_id == b.paper_id);
 
     info!(count = all_candidates.len(), "fetched candidate papers");
 
-    // Cache results
-    store.write_json(&cache_path, &all_candidates)?;
-
-    // Write candidates to date directory
+    // Write raw candidates to date directory (before library dedup)
     let candidates_date_path = StatePath::new(format!("archive/{}/candidates.json", date))?;
     store.write_json(&candidates_date_path, &all_candidates)?;
 
+    // Deduplicate against library and within-candidate
+    let dedup = deduplicate_candidates(&all_candidates, snapshot, run_id);
+
+    info!(
+        input = all_candidates.len(),
+        kept = dedup.candidates.len(),
+        library_matches = dedup.skipped_existing.len(),
+        within_dupes = dedup.duplicates.len(),
+        "deduplication complete"
+    );
+
+    // Write dedup result to date directory
+    let dedup_path = StatePath::new(format!("archive/{}/dedup.json", date))?;
+    store.write_json(&dedup_path, &dedup)?;
+
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
-    record.output_ref = Some(cache_key);
     manifest.stages.push(record);
 
-    Ok(all_candidates)
+    Ok(dedup)
 }
 
-async fn stage_deduplicate(
-    store: &FileStateStore,
-    manifest: &mut RunManifest,
-    run_id: &str,
+/// Deduplicate candidates against the Zotero library and within the candidate set.
+fn deduplicate_candidates(
     candidates: &[CandidatePaper],
     snapshot: &ZoteroSnapshot,
-    date: &str,
-) -> anyhow::Result<DedupResult> {
-    let stage_start = Utc::now();
-    let mut record = StageRecord {
-        stage: StageName::Deduplicate,
-        status: StageStatus::Running,
-        started_at: stage_start,
-        finished_at: None,
-        cache_hit: false,
-        input_hash: None,
-        output_ref: None,
-        error: None,
-    };
-
+    run_id: &str,
+) -> DedupResult {
     let mut kept: Vec<CandidatePaper> = Vec::new();
     let mut skipped_existing = Vec::new();
     let mut seen_dois: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -926,30 +889,12 @@ async fn stage_deduplicate(
         }
     }
 
-    let dedup = DedupResult {
+    DedupResult {
         run_id: run_id.to_string(),
         candidates: kept,
         duplicates,
         skipped_existing,
-    };
-
-    info!(
-        input = candidates.len(),
-        kept = dedup.candidates.len(),
-        library_matches = dedup.skipped_existing.len(),
-        within_dupes = dedup.duplicates.len(),
-        "deduplication complete"
-    );
-
-    // Write dedup result to date directory
-    let dedup_path = StatePath::new(format!("archive/{}/dedup.json", date))?;
-    store.write_json(&dedup_path, &dedup)?;
-
-    record.status = StageStatus::Succeeded;
-    record.finished_at = Some(Utc::now());
-    manifest.stages.push(record);
-
-    Ok(dedup)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1961,28 +1906,29 @@ pub(crate) fn generate_run_id() -> String {
     format!("{}-{}", ts, suffix)
 }
 
+/// arXiv RSS announcement pubDate is midnight US Eastern (UTC-4 during DST).
+const ARXIV_ANNOUNCEMENT_UTC_OFFSET_HOURS: i64 = 4;
+
+fn default_arxiv_announcement_date() -> NaiveDate {
+    arxiv_announcement_date_for(Utc::now())
+}
+
+fn arxiv_announcement_date_for(now: chrono::DateTime<Utc>) -> NaiveDate {
+    (now - Duration::hours(ARXIV_ANNOUNCEMENT_UTC_OFFSET_HOURS)).date_naive()
+}
+
 pub(crate) fn compute_date_window(date_arg: Option<&str>) -> anyhow::Result<DateWindow> {
     let target_date = match date_arg {
         Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .context(format!("invalid date '{}', expected YYYY-MM-DD", s))?,
-        None => Local::now().date_naive(),
+        None => default_arxiv_announcement_date(),
     };
 
-    let start = Local
-        .from_local_datetime(&target_date.and_hms_opt(0, 0, 0).unwrap())
-        .single()
-        .context("ambiguous local time")?
-        .with_timezone(&Utc);
-
-    let end = Local
-        .from_local_datetime(
-            &(target_date + Duration::days(1))
-                .and_hms_opt(0, 0, 0)
-                .unwrap(),
-        )
-        .single()
-        .context("ambiguous local time")?
-        .with_timezone(&Utc);
+    let start = target_date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let end = (target_date + Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
 
     Ok(DateWindow {
         start,
@@ -2400,51 +2346,21 @@ fn load_cached_snapshot(
     anyhow::bail!("no cached snapshot found for date {}", date)
 }
 
-fn load_cached_candidates(
-    store: &FileStateStore,
-    date: &str,
-    source: Option<&RunManifest>,
-) -> anyhow::Result<Vec<CandidatePaper>> {
-    if let Some(cache_key) = stage_output_ref(source, StageName::SourceFetch) {
-        let path = StatePath::new(format!("cache/arxiv/{}.json", cache_key))?;
-        return Ok(store.read_json(&path)?.unwrap_or_default());
-    }
-
-    // Try to read from date directory
-    let candidates_path = StatePath::new(format!("archive/{}/candidates.json", date))?;
-    if let Some(candidates) = store.read_json::<Vec<CandidatePaper>>(&candidates_path)? {
-        info!(
-            count = candidates.len(),
-            "loaded candidates from date cache"
-        );
-        return Ok(candidates);
-    }
-
-    Ok(Vec::new())
-}
-
-fn load_cached_dedup(
-    store: &FileStateStore,
-    date: &str,
-    candidates: &[CandidatePaper],
-    snapshot: &ZoteroSnapshot,
-) -> anyhow::Result<DedupResult> {
-    let _ = (store, snapshot);
-
-    // Try to read from date directory
+fn load_cached_candidates(store: &FileStateStore, date: &str) -> anyhow::Result<DedupResult> {
+    // Try to read dedup result from date directory
     let dedup_path = StatePath::new(format!("archive/{}/dedup.json", date))?;
     if let Some(dedup) = store.read_json::<DedupResult>(&dedup_path)? {
+        info!(
+            kept = dedup.candidates.len(),
+            "loaded dedup result from date cache"
+        );
         return Ok(dedup);
     }
 
-    // Fallback: re-run dedup with current data
-    warn!("no cached dedup found, re-running deduplicate with current data");
-    Ok(DedupResult {
-        run_id: "local".to_string(),
-        candidates: candidates.to_vec(),
-        duplicates: Vec::new(),
-        skipped_existing: Vec::new(),
-    })
+    anyhow::bail!(
+        "no cached candidates found for date {}; run source-fetch first",
+        date
+    )
 }
 
 #[allow(clippy::type_complexity)]
@@ -2575,47 +2491,6 @@ fn load_cached_read_results(
         }
     }
 
-    // Fallback: find read results from papers cache
-    let papers_dir = store.root().join("cache/papers");
-    if papers_dir.exists() {
-        for entry in std::fs::read_dir(&papers_dir)?.filter_map(|e| e.ok()) {
-            let read_dir = entry.path().join("read");
-            if read_dir.exists() {
-                let mut entries: Vec<_> = std::fs::read_dir(&read_dir)?
-                    .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .map(|ext| ext == "json")
-                            .unwrap_or(false)
-                    })
-                    .collect();
-                entries.sort_by(|a, b| {
-                    b.metadata()
-                        .and_then(|m| m.modified())
-                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                        .cmp(
-                            &a.metadata()
-                                .and_then(|m| m.modified())
-                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                        )
-                });
-                if let Some(entry) = entries.first() {
-                    let path = entry.path();
-                    let relative_path = path
-                        .strip_prefix(store.root())
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .to_string();
-                    let path = StatePath::new(relative_path)?;
-                    if let Some(r) = store.read_json::<ReadResult>(&path)? {
-                        return Ok(vec![r]);
-                    }
-                }
-            }
-        }
-    }
-
     Ok(Vec::new())
 }
 
@@ -2672,11 +2547,12 @@ fn load_cached_render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
-    fn default_date_window_uses_local_today() {
+    fn default_date_window_uses_arxiv_announcement_date() {
         let window = compute_date_window(None).unwrap();
-        assert_eq!(window.label, Local::now().date_naive().to_string());
+        assert_eq!(window.label, default_arxiv_announcement_date().to_string());
     }
 
     #[test]
@@ -2684,5 +2560,20 @@ mod tests {
         let window = compute_date_window(Some("2026-06-06")).unwrap();
         assert_eq!(window.label, "2026-06-06");
         assert_eq!(window.end - window.start, chrono::Duration::days(1));
+    }
+
+    #[test]
+    fn arxiv_announcement_date_uses_utc_minus_four_boundary() {
+        let before_boundary = Utc.with_ymd_and_hms(2026, 6, 9, 3, 59, 59).unwrap();
+        let after_boundary = Utc.with_ymd_and_hms(2026, 6, 9, 4, 0, 0).unwrap();
+
+        assert_eq!(
+            arxiv_announcement_date_for(before_boundary).to_string(),
+            "2026-06-08"
+        );
+        assert_eq!(
+            arxiv_announcement_date_for(after_boundary).to_string(),
+            "2026-06-09"
+        );
     }
 }

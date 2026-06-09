@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "daily-paper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "daily-paper-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "directories",
