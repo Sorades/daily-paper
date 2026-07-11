@@ -585,6 +585,7 @@ dependencies = [
  "chrono",
  "clap",
  "daily-paper-core",
+ "directories",
  "fastrand",
  "futures-util",
  "hex",

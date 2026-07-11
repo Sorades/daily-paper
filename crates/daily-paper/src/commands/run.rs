@@ -543,12 +543,14 @@ async fn stage_zotero_sync(
                 store,
                 config,
                 manifest,
-                record,
-                sync_state_path,
-                client,
-                library_version,
-                items,
-                date,
+                ZoteroSyncArgs {
+                    record,
+                    sync_state_path,
+                    client,
+                    library_version,
+                    items,
+                    date: date.to_string(),
+                },
             )
             .await;
         }
@@ -566,12 +568,14 @@ async fn stage_zotero_sync(
             store,
             config,
             manifest,
-            record,
-            sync_state_path,
-            client,
-            library_version,
-            items,
-            date,
+            ZoteroSyncArgs {
+                record,
+                sync_state_path,
+                client,
+                library_version,
+                items,
+                date: date.to_string(),
+            },
         )
         .await;
     }
@@ -580,14 +584,27 @@ async fn stage_zotero_sync(
         store,
         config,
         manifest,
-        record,
-        sync_state_path,
-        client,
-        library_version,
-        items,
-        date,
+        ZoteroSyncArgs {
+            record,
+            sync_state_path,
+            client,
+            library_version,
+            items,
+            date: date.to_string(),
+        },
     )
     .await
+}
+
+/// Arguments for [`stage_zotero_sync_inner`], grouped to stay under clippy's
+/// argument-count limit.
+struct ZoteroSyncArgs {
+    record: StageRecord,
+    sync_state_path: StatePath,
+    client: ZoteroClient,
+    library_version: Option<u64>,
+    items: Vec<serde_json::Value>,
+    date: String,
 }
 
 /// Core snapshot creation logic extracted so both normal and fallback paths
@@ -596,13 +613,16 @@ async fn stage_zotero_sync_inner(
     store: &FileStateStore,
     config: &ResolvedConfig,
     manifest: &mut RunManifest,
-    mut record: StageRecord,
-    sync_state_path: StatePath,
-    client: ZoteroClient,
-    library_version: Option<u64>,
-    items: Vec<serde_json::Value>,
-    date: &str,
+    args: ZoteroSyncArgs,
 ) -> anyhow::Result<ZoteroSnapshot> {
+    let ZoteroSyncArgs {
+        mut record,
+        sync_state_path,
+        client,
+        library_version,
+        items,
+        date,
+    } = args;
     let collections = client
         .fetch_collections()
         .await

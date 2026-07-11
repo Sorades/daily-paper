@@ -4,6 +4,7 @@ mod config;
 mod run;
 pub(crate) mod serve;
 mod status;
+mod systemd;
 
 use crate::cli::{Cli, Commands};
 use daily_paper_core::config::default_data_dir;
@@ -43,6 +44,13 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             match cmd {
                 crate::cli::ArchiveCommands::List => archive::list(&data_dir)?,
                 crate::cli::ArchiveCommands::Show(args) => archive::show(&data_dir, &args.date)?,
+            }
+        }
+        Some(Commands::Systemd(cmd)) => {
+            init_tracing();
+            match cmd {
+                crate::cli::SystemdCommands::Install => systemd::install(&data_dir)?,
+                crate::cli::SystemdCommands::Uninstall => systemd::uninstall(&data_dir)?,
             }
         }
     }

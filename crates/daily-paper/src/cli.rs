@@ -40,6 +40,9 @@ pub enum Commands {
     /// Manage archive
     #[command(subcommand)]
     Archive(ArchiveCommands),
+    /// Manage systemd service
+    #[command(subcommand)]
+    Systemd(SystemdCommands),
 }
 
 #[derive(Subcommand)]
@@ -136,4 +139,12 @@ pub struct StatusArgs {
     /// Show status for a specific run
     #[arg(long)]
     pub run_id: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum SystemdCommands {
+    /// Install user-level systemd service
+    Install,
+    /// Remove systemd service
+    Uninstall,
 }
