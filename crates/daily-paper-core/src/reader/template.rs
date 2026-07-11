@@ -1,5 +1,6 @@
 use sha2::Digest;
-use std::path::Path;
+
+use crate::error::Error;
 
 /// Default system prompt for deep reading (fallback if template file not found).
 const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a research paper analyst. Given a paper's title, abstract, and selected text sections, produce a structured analysis.
@@ -100,35 +101,36 @@ pub fn build_tldr_system_prompt() -> String {
     TLDR_SYSTEM_PROMPT.to_string()
 }
 
-/// Build the system prompt (can be overridden by template file).
+/// Load a template file with two-level priority:
 ///
-/// Looks for template in this order:
-/// 1. `.daily-paper/config/templates/system_prompt.txt` (project mode)
-/// 2. `templates/system_prompt.txt` relative to current directory
-/// 3. Built-in default
-pub fn build_system_prompt(template_dir: Option<&Path>) -> String {
-    // Try to load from template directory
-    if let Some(dir) = template_dir {
-        let path = dir.join("system_prompt.txt");
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            return content;
-        }
+/// 1. Explicit path (must exist, error if not found)
+/// 2. Built-in default
+///
+/// When no explicit path is given, tries `.daily-paper/config/templates/{default_filename}` first.
+pub fn load_template(
+    explicit_path: Option<&str>,
+    default_filename: &str,
+    fallback: &str,
+) -> crate::error::Result<String> {
+    // 1. Explicit path -> must exist
+    if let Some(p) = explicit_path {
+        return std::fs::read_to_string(p)
+            .map_err(|_| Error::Render(format!("template file not found: {}", p)));
     }
 
-    // Try default locations
-    let default_paths = [
-        Path::new(".daily-paper/config/templates/system_prompt.txt"),
-        Path::new("templates/system_prompt.txt"),
-    ];
-
-    for path in &default_paths {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            return content;
-        }
+    // 2. Default config path -> optional
+    let default_path = format!(".daily-paper/config/templates/{}", default_filename);
+    if let Ok(content) = std::fs::read_to_string(&default_path) {
+        return Ok(content);
     }
 
-    // Fall back to built-in
-    DEFAULT_SYSTEM_PROMPT.to_string()
+    // 3. Built-in fallback
+    Ok(fallback.to_string())
+}
+
+/// Build the system prompt using unified template loading.
+pub fn build_system_prompt(explicit_path: Option<&str>) -> crate::error::Result<String> {
+    load_template(explicit_path, "system_prompt.txt", DEFAULT_SYSTEM_PROMPT)
 }
 
 /// Parsed LLM output containing summary and metadata.
@@ -387,16 +389,15 @@ mod tests {
 
     #[test]
     fn default_system_prompt_non_empty() {
-        let prompt = build_system_prompt(None);
+        let prompt = build_system_prompt(None).unwrap();
         assert!(prompt.len() > 50);
     }
 
     #[test]
     fn load_template_from_file() {
-        let dir = Path::new("tests/fixtures");
-        let prompt = build_system_prompt(Some(dir));
-        // Should load from file if exists, otherwise fall back to default
-        assert!(prompt.len() > 50);
+        // When explicit path doesn't exist, should return error
+        let result = build_system_prompt(Some("nonexistent/path/system_prompt.txt"));
+        assert!(result.is_err());
     }
 
     #[test]

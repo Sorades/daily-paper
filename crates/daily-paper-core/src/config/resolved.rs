@@ -24,6 +24,8 @@ pub struct ResolvedConfig {
     pub email: ResolvedEmailConfig,
     pub web: ResolvedWebConfig,
     pub schedule: ResolvedScheduleConfig,
+    /// Path to custom report.html template (optional, falls back to built-in)
+    pub report_template_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +84,8 @@ pub struct ResolvedReaderConfig {
     pub max_retries: u32,
     pub max_concurrency: usize,
     pub max_input_tokens: usize,
+    /// Path to custom system_prompt.txt template (optional, falls back to built-in)
+    pub system_prompt_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +193,7 @@ impl ResolvedConfig {
                 max_retries: raw.reader.max_retries.unwrap_or(5),
                 max_concurrency: raw.reader.max_concurrency.unwrap_or(2),
                 max_input_tokens: raw.reader.max_input_tokens.unwrap_or(60000),
+                system_prompt_path: raw.reader.system_prompt_path.clone(),
             },
             pdf: ResolvedPdfConfig {
                 extractor: raw.pdf.extractor.clone(),
@@ -229,6 +234,7 @@ impl ResolvedConfig {
                     minute,
                 }
             },
+            report_template_path: raw.report_template_path.clone(),
         })
     }
 }
@@ -280,6 +286,7 @@ mod tests {
                 max_retries: None,
                 max_concurrency: None,
                 max_input_tokens: None,
+                system_prompt_path: None,
             },
             pdf: PdfConfig {
                 extractor: "pdftotext".into(),
@@ -296,6 +303,7 @@ mod tests {
             },
             web: None,
             schedule: None,
+            report_template_path: None,
         }
     }
 

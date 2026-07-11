@@ -181,6 +181,7 @@ pub fn make_test_config(mock_server_url: &str) -> ResolvedConfig {
             max_retries: 2,
             max_concurrency: 2,
             max_input_tokens: 4000,
+            system_prompt_path: None,
         },
         pdf: ResolvedPdfConfig {
             extractor: "pdftotext".to_string(),
@@ -204,5 +205,6 @@ pub fn make_test_config(mock_server_url: &str) -> ResolvedConfig {
             hour: 7,
             minute: 30,
         },
+        report_template_path: None,
     }
 }

@@ -116,6 +116,7 @@ mod tests {
                 max_retries: None,
                 max_concurrency: None,
                 max_input_tokens: None,
+                system_prompt_path: None,
             },
             pdf: PdfConfig {
                 extractor: "pdftotext".into(),
@@ -132,6 +133,7 @@ mod tests {
             },
             web: None,
             schedule: None,
+            report_template_path: None,
         }
     }
 

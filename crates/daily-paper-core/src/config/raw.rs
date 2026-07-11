@@ -11,6 +11,8 @@ pub struct RawConfig {
     pub email: EmailConfig,
     pub web: Option<WebConfig>,
     pub schedule: Option<ScheduleConfig>,
+    /// Path to custom report.html template (optional)
+    pub report_template_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -69,6 +71,8 @@ pub struct ReaderConfig {
     pub max_retries: Option<u32>,
     pub max_concurrency: Option<usize>,
     pub max_input_tokens: Option<usize>,
+    /// Path to custom system_prompt.txt template (optional)
+    pub system_prompt_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

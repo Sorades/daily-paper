@@ -44,7 +44,7 @@ async fn test_reader_produces_summary() {
         4000,
     );
 
-    let system_prompt = daily_paper_core::reader::template::build_system_prompt(None);
+    let system_prompt = daily_paper_core::reader::template::build_system_prompt(None).unwrap();
     let user_prompt = daily_paper_core::reader::template::build_user_prompt(
         "Test Paper",
         "A test abstract.",
@@ -138,7 +138,7 @@ fn test_render_produces_html() {
         score: 0.85,
     }];
 
-    let html = render_html("Test Report", &papers, "test-run-001");
+    let html = render_html("Test Report", &papers, "test-run-001", None).unwrap();
 
     assert!(html.contains("Test Paper"));
     assert!(html.contains("Alice Smith"));

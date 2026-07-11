@@ -365,6 +365,7 @@ pub async fn run_pipeline(
         emit_event(event_tx, run_id, StageName::Render, true);
         let r = stage_render(
             store,
+            config,
             manifest,
             run_id,
             RenderInput {
@@ -1358,7 +1359,9 @@ async fn stage_deep_read(
         config.reader.max_input_tokens,
     );
 
-    let template_hash = compute_template_hash(&build_system_prompt(None));
+    let template_hash = compute_template_hash(&build_system_prompt(
+        config.reader.system_prompt_path.as_deref(),
+    )?);
     let mut read_results = Vec::new();
     let mut any_failure = false;
 
@@ -1508,7 +1511,7 @@ async fn stage_deep_read(
                 &selected_text,
                 &config.reader.language,
             );
-            let system_prompt = build_system_prompt(None);
+            let system_prompt = build_system_prompt(config.reader.system_prompt_path.as_deref())?;
 
             let trimmed_prompt =
                 trim_to_token_budget(&user_prompt, config.reader.max_input_tokens * 4);
@@ -1698,6 +1701,7 @@ struct RenderInput<'a> {
 
 async fn stage_render(
     store: &FileStateStore,
+    config: &ResolvedConfig,
     manifest: &mut RunManifest,
     run_id: &str,
     input: RenderInput<'_>,
@@ -1745,8 +1749,13 @@ async fn stage_render(
         })
         .collect();
 
-    let title = format!("Daily Paper - {}", manifest.date_window.label);
-    let html_body = render_html(&title, &report_papers, run_id);
+    let title = format!("Report - {}", manifest.date_window.label);
+    let html_body = render_html(
+        &title,
+        &report_papers,
+        run_id,
+        config.report_template_path.as_deref(),
+    )?;
     let text_body = render_text(&title, &report_papers, run_id);
 
     // Write report files to cache (versioned)
@@ -1881,7 +1890,7 @@ async fn stage_send(
         }
     }
 
-    let subject = format!("Daily Paper - {}", rendered.title);
+    let subject = format!("Daily Paper - {}", manifest.date_window.label);
     let now = Utc::now();
 
     let receipt = daily_paper_core::deliver::receipt::deliver_email(
