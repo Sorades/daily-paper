@@ -41,10 +41,21 @@
     [...stages].sort((a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage)),
   )
 
+  // Live timer tick for running stage duration
+  let now = $state(Date.now())
+  $effect(() => {
+    const hasRunning = stages.some((s) => s.status === 'Running')
+    if (!hasRunning) return
+    const timer = setInterval(() => {
+      now = Date.now()
+    }, 1000)
+    return () => clearInterval(timer)
+  })
+
   function formatDuration(start: string | null, end: string | null): string {
     if (!start) return ''
     const s = new Date(start).getTime()
-    const e = end ? new Date(end).getTime() : Date.now()
+    const e = end ? new Date(end).getTime() : now
     const ms = Math.max(0, e - s)
     if (ms < 1000) return `${ms}ms`
     if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`

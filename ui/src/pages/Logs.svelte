@@ -43,15 +43,30 @@
     return { raw: line, level, message: line }
   }
 
+  // Cache line parsing with a bounded map so we don't re-run regex on existing lines
+  const parseCache = new Map<string, FormattedLine>()
+
+  function getOrParseLine(line: string): FormattedLine {
+    let cached = parseCache.get(line)
+    if (!cached) {
+      cached = parseLine(line)
+      if (parseCache.size > 2000) {
+        parseCache.clear()
+      }
+      parseCache.set(line, cached)
+    }
+    return cached
+  }
+
   let filteredLines = $derived.by(() => {
+    const q = searchQuery.trim().toLowerCase()
     return logState.lines
-      .map(parseLine)
+      .map(getOrParseLine)
       .filter((item) => {
         if (filterLevel !== 'ALL' && item.level !== filterLevel) {
           return false
         }
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase()
+        if (q) {
           return item.raw.toLowerCase().includes(q)
         }
         return true
@@ -159,25 +174,31 @@
     </div>
   </div>
 
-  <!-- Terminal Window -->
-  <div class="terminal-card">
-    <div class="terminal-bar">
-      <div class="mac-buttons">
-        <span class="mac-btn red"></span>
-        <span class="mac-btn yellow"></span>
-        <span class="mac-btn green"></span>
+  <!-- Terminal / Console Window Card -->
+  <div class="log-console-card">
+    <div class="console-header">
+      <div class="header-status-group">
+        <Icon name="terminal" size={15} />
+        <span class="console-title">Backend Event Stream</span>
+        <span class="stream-badge" class:connected={logState.connected}>
+          <span class="status-dot"></span>
+          <span>{logState.connected ? '实时在线' : '连接中断'}</span>
+        </span>
       </div>
-      <span class="terminal-title">daily-paper-serve :: stdout/stderr</span>
+      <div class="console-tools">
+        <span class="console-hint">自动保留最近 500 条服务日志</span>
+      </div>
     </div>
 
-    <div class="terminal-body" bind:this={container}>
+    <div class="console-body" bind:this={container}>
       {#if filteredLines.length === 0}
         <div class="empty-terminal">
+          <Icon name="file-text" size={24} />
           <p>
             {#if logState.lines.length === 0}
-              Waiting for live logs from server stream...
+              正在等待后端实时日志事件...
             {:else}
-              No log lines match current filter ({filterLevel}, "{searchQuery}").
+              没有找到匹配当前过滤条件的日志（{filterLevel}，"{searchQuery}"）。
             {/if}
           </p>
         </div>
@@ -370,65 +391,79 @@
     font-family: var(--font-mono);
   }
 
-  /* Terminal Window */
-  .terminal-card {
+  /* Console Window Card using unified design tokens */
+  .log-console-card {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #30363d;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius-xl);
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--shadow-sm);
   }
 
-  .terminal-bar {
+  .console-header {
     display: flex;
     align-items: center;
-    padding: 10px 16px;
-    background: #161b22;
-    border-bottom: 1px solid #30363d;
-    position: relative;
+    justify-content: space-between;
+    padding: 12px 18px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
   }
 
-  .mac-buttons {
+  .header-status-group {
     display: flex;
-    gap: 6px;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-primary);
   }
 
-  .mac-btn {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
+  .console-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
 
-  .mac-btn.red {
-    background: #ff5f56;
-  }
-  .mac-btn.yellow {
-    background: #ffbd2e;
-  }
-  .mac-btn.green {
-    background: #27c93f;
-  }
-
-  .terminal-title {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-family: var(--font-mono);
+  .stream-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: 11px;
-    color: #8b949e;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--danger-light);
+    color: var(--danger-text);
+    border: 1px solid var(--danger-border);
   }
 
-  .terminal-body {
+  .stream-badge.connected {
+    background: var(--success-light);
+    color: var(--success-text);
+    border: 1px solid var(--success-border);
+  }
+
+  .console-tools {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .console-hint {
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  .console-body {
     flex: 1;
     overflow-y: auto;
     padding: 14px 18px;
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.6;
-    color: #c9d1d9;
+    background: var(--bg-primary);
+    color: var(--text-primary);
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -436,11 +471,17 @@
 
   .empty-terminal {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     height: 100%;
-    color: #484f58;
-    font-style: italic;
+    gap: 10px;
+    color: var(--text-tertiary);
+    font-size: 13px;
+  }
+
+  .empty-terminal p {
+    margin: 0;
   }
 
   .log-entry {
@@ -449,40 +490,52 @@
     gap: 10px;
     word-break: break-all;
     white-space: pre-wrap;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast);
+  }
+
+  .log-entry:hover {
+    background: var(--bg-hover);
   }
 
   .log-time {
-    color: #484f58;
+    color: var(--text-tertiary);
     flex-shrink: 0;
     font-size: 11px;
   }
 
   .log-level-badge {
-    padding: 0 5px;
-    border-radius: 3px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
     font-size: 10px;
     font-weight: 700;
     flex-shrink: 0;
+    letter-spacing: 0.02em;
   }
 
   .level-info {
-    background: rgba(56, 189, 248, 0.15);
-    color: #38bdf8;
+    background: var(--info-light);
+    color: var(--info-text);
+    border: 1px solid var(--info-border);
   }
 
   .level-warn {
-    background: rgba(245, 158, 11, 0.15);
-    color: #fbbf24;
+    background: var(--warning-light);
+    color: var(--warning-text);
+    border: 1px solid var(--warning-border);
   }
 
   .level-error {
-    background: rgba(239, 68, 68, 0.2);
-    color: #f87171;
+    background: var(--danger-light);
+    color: var(--danger-text);
+    border: 1px solid var(--danger-border);
   }
 
   .level-debug {
-    background: rgba(148, 163, 184, 0.15);
-    color: #94a3b8;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
   }
 
   .log-msg {
@@ -490,18 +543,18 @@
   }
 
   .level-text-error {
-    color: #fca5a5;
+    color: var(--danger);
   }
 
   .level-text-warn {
-    color: #fde68a;
+    color: var(--warning-text);
   }
 
   .level-text-info {
-    color: #e6edf3;
+    color: var(--text-primary);
   }
 
   .level-text-debug {
-    color: #8b949e;
+    color: var(--text-secondary);
   }
 </style>

@@ -462,9 +462,37 @@
                   oninput={markDirty}
                   placeholder="text-embedding-3-small 或 qwen3-embedding:0.6b"
                 />
-                <span class="field-hint">若使用 API，则继承上方 Base URL 和 Key</span>
+                <span class="field-hint">如 text-embedding-3-small, qwen3-embedding:0.6b</span>
               </div>
             </div>
+
+            {#if parsed.embedding!.kind === 'openai-compatible'}
+              <div class="form-grid cols-2" style="margin-top: 14px;">
+                <div class="form-field">
+                  <label for="embed-url">Embedding API Base URL</label>
+                  <input
+                    id="embed-url"
+                    type="text"
+                    bind:value={parsed.embedding!.base_url}
+                    oninput={markDirty}
+                    placeholder="https://api.openai.com/v1 或 http://127.0.0.1:23000/v1"
+                  />
+                  <span class="field-hint">独立配置 Embedding 服务的端点地址</span>
+                </div>
+
+                <div class="form-field">
+                  <label for="embed-key">Embedding API Key</label>
+                  <input
+                    id="embed-key"
+                    type="password"
+                    bind:value={parsed.embedding!.api_key}
+                    oninput={markDirty}
+                    placeholder="sk-..."
+                  />
+                  <span class="field-hint">用于 Embedding 请求的鉴权密钥</span>
+                </div>
+              </div>
+            {/if}
           </div>
         </section>
 

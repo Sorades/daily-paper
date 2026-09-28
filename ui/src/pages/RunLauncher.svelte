@@ -28,6 +28,7 @@
   let stages = $state<string[]>([])
   let fromRun = $state('')
   let forceZoteroSync = $state(false)
+  let forceEmbedding = $state(false)
   let forceRerank = $state(false)
   let forceRead = $state(false)
   let forceSend = $state(false)
@@ -55,10 +56,20 @@
   })
 
   function toggleStage(value: string) {
-    if (stages.includes(value)) {
-      stages = stages.filter((s) => s !== value)
+    let currentSelected: string[]
+    if (stages.length === 0) {
+      // If currently all stages are selected (default), clicking one unchecks it
+      currentSelected = ALL_STAGES.map((s) => s.value).filter((s) => s !== value)
+    } else if (stages.includes(value)) {
+      currentSelected = stages.filter((s) => s !== value)
     } else {
-      stages = [...stages, value]
+      currentSelected = [...stages, value]
+    }
+    // If user selected all stages, normalize back to empty array (full pipeline)
+    if (currentSelected.length === ALL_STAGES.length) {
+      stages = []
+    } else {
+      stages = currentSelected
     }
   }
 
@@ -87,17 +98,20 @@
     if (stages.length > 0) req.stages = stages
     if (fromRun.trim()) req.from_run = fromRun.trim()
     if (forceZoteroSync) req.force_zotero_sync = true
+    if (forceEmbedding) req.force_embedding = true
     if (forceRerank) req.force_rerank = true
     if (forceRead) req.force_read = true
     if (forceSend) req.force_send = true
-    if (maxCandidates.trim()) req.max_candidates = parseInt(maxCandidates, 10)
+    if (maxCandidates !== null && maxCandidates !== undefined && String(maxCandidates).trim() !== '') {
+      req.max_candidates = parseInt(String(maxCandidates), 10)
+    }
 
     try {
       const res = await triggerRun(req)
+      submitting = false
       navigate(`#/run/${res.run_id}`)
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e)
-    } finally {
       submitting = false
     }
   }
@@ -196,7 +210,12 @@
               class:selected={isSelected}
               role="button"
               tabindex="0"
-              onclick={() => toggleStage(st.value)}
+              onclick={(e) => {
+                // If clicked directly on the checkbox, let the checkbox onchange handle it
+                if ((e.target as HTMLElement).tagName !== 'INPUT') {
+                  toggleStage(st.value)
+                }
+              }}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleStage(st.value) }}
             >
               <div class="stage-check-wrap">
@@ -204,7 +223,6 @@
                   type="checkbox"
                   checked={isSelected}
                   onchange={() => toggleStage(st.value)}
-                  tabindex="-1"
                 />
               </div>
               <div class="stage-card-body">
@@ -311,6 +329,14 @@
               <div class="checkbox-label-text">
                 <strong>Force Zotero Sync</strong>
                 <span>Ignore collection cache and re-download all items</span>
+              </div>
+            </label>
+
+            <label class="custom-checkbox-row">
+              <input type="checkbox" bind:checked={forceEmbedding} />
+              <div class="checkbox-label-text">
+                <strong>Force Embedding</strong>
+                <span>Bypass cached .vec files and recalculate embeddings via API/model</span>
               </div>
             </label>
 

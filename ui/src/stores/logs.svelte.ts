@@ -41,12 +41,31 @@ export function clearLines(): void {
   lines = []
 }
 
+let pendingBatch: string[] = []
+let batchTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushBatch() {
+  if (pendingBatch.length > 0) {
+    const toAdd = pendingBatch
+    pendingBatch = []
+    lines = [...lines.slice(-(MAX_LINES - toAdd.length)), ...toAdd]
+  }
+  batchTimer = null
+}
+
 function doConnect(): void {
   es = new EventSource('/api/logs/stream')
 
   es.addEventListener('log', (e) => {
     const line = e.data as string
-    lines = [...lines.slice(-(MAX_LINES - 1)), line]
+    // Filter out extremely noisy low-level web connection trace logs
+    if (line.includes('TRACE axum::serve') || line.includes('TRACE hyper::')) {
+      return
+    }
+    pendingBatch.push(line)
+    if (!batchTimer) {
+      batchTimer = setTimeout(flushBatch, 100)
+    }
   })
 
   es.addEventListener('ping', () => {

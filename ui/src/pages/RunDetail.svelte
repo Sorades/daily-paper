@@ -129,11 +129,17 @@
     void runId
     loadRun()
 
-    if (manifest?.status === 'Running') {
-      connect(runId)
-    }
+    // Keep SSE connection active if run is active OR if status is not loaded yet
+    connect(runId)
 
     return () => {
+      disconnect()
+    }
+  })
+
+  // When manifest finishes or pipeline reports Ended, we can disconnect gracefully
+  $effect(() => {
+    if (manifest && manifest.status !== 'Running' && !pipeline.latestStage) {
       disconnect()
     }
   })
@@ -152,6 +158,44 @@
   let hasReport = $derived(
     manifest?.stages.some((s) => s.stage === 'Render' && s.status === 'Succeeded'),
   )
+
+  // Track real start time of client-detected stages so live duration increments properly
+  const stageStartTimes = new Map<string, number>()
+
+  // Display stages with deduplication by stage name (prefer completed/later record)
+  let displayStages = $derived.by(() => {
+    if (!manifest) return []
+    const map = new Map<string, StageRecord>()
+    for (const s of manifest.stages) {
+      const existing = map.get(s.stage)
+      if (!existing || existing.status === 'Running' || s.finished_at) {
+        map.set(s.stage, s)
+      }
+    }
+
+    const curStage = pipeline.latestStage
+    if (manifest.status === 'Running' && curStage) {
+      const existing = map.get(curStage)
+      if (!existing) {
+        if (!stageStartTimes.has(curStage)) {
+          stageStartTimes.set(curStage, Date.now())
+        }
+        map.set(curStage, {
+          stage: curStage,
+          status: 'Running',
+          started_at: new Date(stageStartTimes.get(curStage)!).toISOString(),
+          finished_at: null,
+          cache_hit: false,
+          input_hash: null,
+          output_ref: null,
+          error: null,
+        })
+      } else if (existing.status !== 'Succeeded' && existing.status !== 'Failed') {
+        existing.status = 'Running'
+      }
+    }
+    return Array.from(map.values())
+  })
 </script>
 
 <div class="run-detail-page">
@@ -191,7 +235,7 @@
         <div class="title-with-badges">
           <h2>Run Manifest</h2>
           <StatusBadge status={manifest.status} size="md" />
-          {#if pipeline.connected}
+          {#if manifest.status === 'Running' && pipeline.connected}
             <span class="live-pill">
               <span class="pulse-dot"></span>
               <span>LIVE SSE</span>
@@ -324,12 +368,16 @@
           <h3>Execution Pipeline Stages</h3>
         </div>
         <span class="section-sub">
-          {manifest.stages.filter((s) => s.status === 'Succeeded').length} of {manifest.stages.length} completed
+          {#if manifest.status === 'Running'}
+            {manifest.stages.filter((s) => s.status === 'Succeeded').length} of {displayStages.length} completed (Running)
+          {:else}
+            {manifest.stages.filter((s) => s.status === 'Succeeded').length} of {manifest.stages.length} completed
+          {/if}
         </span>
       </div>
 
       <StageTimeline
-        stages={manifest.stages}
+        stages={displayStages}
         progress={pipeline.latestProgress
           ? {
               stage: pipeline.latestStage!,
