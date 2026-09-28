@@ -12,32 +12,47 @@
   let route = $derived(getRoute())
 </script>
 
-<Nav />
+<div class="app-layout">
+  <Nav />
 
-<main>
-  {#if route.page === 'dashboard'}
-    <Dashboard />
-  {:else if route.page === 'date'}
-    <DateDetail date={route.params.date} />
-  {:else if route.page === 'run' && route.params.id === 'new'}
-    <RunLauncher />
-  {:else if route.page === 'run'}
-    <RunDetail runId={route.params.id} />
-  {:else if route.page === 'config'}
-    <Config />
-  {:else if route.page === 'cache'}
-    <Cache />
-  {:else if route.page === 'logs'}
-    <Logs />
-  {/if}
-</main>
+  <main class="main-content">
+    {#if route.page === 'dashboard'}
+      <Dashboard />
+    {:else if route.page === 'date'}
+      <DateDetail date={route.params.date} />
+    {:else if route.page === 'run' && route.params.id === 'new'}
+      <RunLauncher />
+    {:else if route.page === 'run'}
+      <RunDetail runId={route.params.id} />
+    {:else if route.page === 'config'}
+      <Config />
+    {:else if route.page === 'cache'}
+      <Cache />
+    {:else if route.page === 'logs'}
+      <Logs />
+    {/if}
+  </main>
+</div>
 
 <style>
-  main {
-    max-width: 1200px;
+  .app-layout {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background-color: var(--bg-app);
+  }
+
+  .main-content {
+    max-width: 1280px;
     margin: 0 auto;
-    padding: 24px 20px;
+    padding: 28px 24px 60px;
     flex: 1;
     width: 100%;
+  }
+
+  @media (max-width: 640px) {
+    .main-content {
+      padding: 16px 14px 40px;
+    }
   }
 </style>
