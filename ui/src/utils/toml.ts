@@ -147,12 +147,21 @@ export function parseToml(tomlStr: string): ParsedConfig {
     const arrayMatch = line.match(/^\[\[([^\]]+)\]\]$/)
     if (arrayMatch) {
       currentSectionName = arrayMatch[1].trim()
-      if (!Array.isArray(result[currentSectionName])) {
-        result[currentSectionName] = []
+      const parts = currentSectionName.split('.')
+      if (parts.length === 2) {
+        if (!result[parts[0]]) result[parts[0]] = {}
+        if (!Array.isArray(result[parts[0]][parts[1]])) result[parts[0]][parts[1]] = []
+        const newObj = {}
+        result[parts[0]][parts[1]].push(newObj)
+        currentSection = newObj
+      } else {
+        if (!Array.isArray(result[currentSectionName])) {
+          result[currentSectionName] = []
+        }
+        const newObj = {}
+        result[currentSectionName].push(newObj)
+        currentSection = newObj
       }
-      const newObj = {}
-      result[currentSectionName].push(newObj)
-      currentSection = newObj
       continue
     }
 
