@@ -45,13 +45,14 @@ const MAX_LOG_LINES: usize = 10_000;
 
 // ── API request/response types ───────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct RunRequest {
     stages: Option<Vec<String>>,
     from_run: Option<String>,
     date: Option<String>,
     dry_run: Option<bool>,
     force_zotero_sync: Option<bool>,
+    force_embedding: Option<bool>,
     force_rerank: Option<bool>,
     force_read: Option<bool>,
     force_send: Option<bool>,
@@ -201,6 +202,9 @@ pub async fn execute(data_dir: &Path, port: Option<u16>, no_schedule: bool) -> a
 
     let ui_path = data_dir.join("ui");
 
+    // Reconcile any orphan "Running" runs from previous server process crash / kill
+    reconcile_orphan_runs(&store);
+
     // Save schedule config before state takes ownership of resolved
     let schedule_enabled = resolved.schedule.enabled && !no_schedule;
     let schedule_hour = resolved.schedule.hour;
@@ -330,6 +334,7 @@ async fn scheduler_loop(state: AppState, hour: u32, minute: u32) {
             date: None,
             dry_run: Some(false),
             force_zotero_sync: None,
+            force_embedding: None,
             force_rerank: None,
             force_read: None,
             force_send: None,
@@ -367,6 +372,7 @@ fn spawn_pipeline(state: &AppState, req: &RunRequest) -> Result<String, ApiError
         send_email: req.send_email.unwrap_or(false),
         no_email: req.no_email.unwrap_or(true),
         force_zotero_sync: req.force_zotero_sync.unwrap_or(false),
+        force_embedding: req.force_embedding.unwrap_or(false),
         force_rerank: req.force_rerank.unwrap_or(false),
         force_read: req.force_read.unwrap_or(false),
         force_send: req.force_send.unwrap_or(false),
@@ -500,7 +506,9 @@ async fn api_run_trigger(
     State(state): State<AppState>,
     Json(req): Json<RunRequest>,
 ) -> Result<Json<RunStartResponse>, ApiError> {
+    info!(req = ?req, "received api_run_trigger request");
     let run_id = spawn_pipeline(&state, &req)?;
+    info!(run_id = %run_id, "api_run_trigger spawned successfully");
     Ok(Json(RunStartResponse {
         run_id,
         message: "pipeline started".to_string(),
@@ -718,6 +726,7 @@ async fn api_run_send(
         send_email: true,
         no_email: false,
         force_zotero_sync: false,
+        force_embedding: false,
         force_rerank: false,
         force_read: false,
         force_send: false,
@@ -1013,6 +1022,48 @@ fn collect_runs(store: &FileStateStore) -> Vec<RunManifest> {
     }
     manifests.sort_by_key(|m| std::cmp::Reverse(m.started_at));
     manifests
+}
+
+/// On server startup, mark any runs left in "Running" status from a prior killed/crashed process as "Failed".
+/// Also remove any stale lock file left behind.
+fn reconcile_orphan_runs(store: &FileStateStore) {
+    let runs_dir = store.root().join("cache/runs");
+    if runs_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&runs_dir) {
+            for entry in entries.flatten() {
+                let manifest_path = entry.path().join("manifest.json");
+                if manifest_path.exists() {
+                    if let Ok(path) = StatePath::new(format!(
+                        "cache/runs/{}/manifest.json",
+                        entry.file_name().to_string_lossy()
+                    )) {
+                        if let Ok(Some(mut m)) = store.read_json::<RunManifest>(&path) {
+                            if m.status == RunStatus::Running {
+                                info!(run_id = %m.run_id, "marking interrupted run as Failed");
+                                m.status = RunStatus::Failed;
+                                m.finished_at = Some(chrono::Utc::now());
+                                m.error = Some(ErrorRecord {
+                                    kind: ErrorKind::Storage,
+                                    message: "process was terminated while running".to_string(),
+                                    retryable: true,
+                                    context: serde_json::Value::Null,
+                                    occurred_at: chrono::Utc::now(),
+                                });
+                                let _ = store.write_json(&path, &m);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean up stale lock file if process is no longer running
+    let lock_file = store.root().join("lock");
+    if lock_file.exists() {
+        let _ = std::fs::remove_file(&lock_file);
+        info!("cleared stale lock file on startup");
+    }
 }
 
 fn dir_size_and_count(path: &Path) -> (u64, usize) {

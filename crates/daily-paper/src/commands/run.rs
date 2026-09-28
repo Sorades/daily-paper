@@ -211,7 +211,7 @@ pub async fn run_pipeline(
 
     // Stage 1: Zotero sync
     let snapshot = if should_run(&StageName::ZoteroSync) {
-        emit_event(event_tx, run_id, StageName::ZoteroSync, true);
+        emit_event(event_tx, manifest, store, manifest_path, run_id, StageName::ZoteroSync, true);
         let r = stage_zotero_sync(store, config, manifest, args.force_zotero_sync, date).await;
         emit_stage_end(event_tx, manifest, run_id, StageName::ZoteroSync, &r);
         let _ = store.write_json(manifest_path, manifest);
@@ -228,7 +228,7 @@ pub async fn run_pipeline(
 
     // Stage 2: Source fetch (includes dedup)
     let mut dedup = if should_run(&StageName::SourceFetch) {
-        emit_event(event_tx, run_id, StageName::SourceFetch, true);
+        emit_event(event_tx, manifest, store, manifest_path, run_id, StageName::SourceFetch, true);
         let r = stage_source_fetch(
             store,
             config,
@@ -272,7 +272,7 @@ pub async fn run_pipeline(
 
     // Stage 4: Embedding
     let (candidate_embs, library_embs) = if should_run(&StageName::Embedding) {
-        emit_event(event_tx, run_id, StageName::Embedding, true);
+        emit_event(event_tx, manifest, store, manifest_path, run_id, StageName::Embedding, true);
         let r = stage_embedding(
             store,
             config,
@@ -280,6 +280,7 @@ pub async fn run_pipeline(
             &dedup.candidates,
             &snapshot,
             date,
+            args.force_embedding,
             event_tx,
             run_id,
         )
@@ -300,7 +301,7 @@ pub async fn run_pipeline(
 
     // Stage 5: Rerank + selection
     let (selection, rerank_scores) = if should_run(&StageName::Rerank) {
-        emit_event(event_tx, run_id, StageName::Rerank, true);
+        emit_event(event_tx, manifest, store, manifest_path, run_id, StageName::Rerank, true);
         let r = stage_rerank(
             store,
             config,
@@ -333,7 +334,7 @@ pub async fn run_pipeline(
 
     // Stage 6-9: Deep read (PDF + extract + metadata + LLM)
     let read_results = if should_run(&StageName::DeepRead) {
-        emit_event(event_tx, run_id, StageName::DeepRead, true);
+        emit_event(event_tx, manifest, store, manifest_path, run_id, StageName::DeepRead, true);
         let r = stage_deep_read(
             store,
             config,
@@ -362,7 +363,7 @@ pub async fn run_pipeline(
 
     // Stage 10: Render
     let (html_path, text_path) = if should_run(&StageName::Render) {
-        emit_event(event_tx, run_id, StageName::Render, true);
+        emit_event(event_tx, manifest, store, manifest_path, run_id, StageName::Render, true);
         let r = stage_render(
             store,
             config,
@@ -412,7 +413,7 @@ pub async fn run_pipeline(
             } else {
                 source_manifest.map(|m| m.run_id.as_str()).unwrap_or(run_id)
             };
-            emit_event(event_tx, run_id, StageName::Send, true);
+            emit_event(event_tx, manifest, store, manifest_path, run_id, StageName::Send, true);
             let r = stage_send(
                 store,
                 config,
@@ -478,7 +479,7 @@ async fn stage_zotero_sync(
                         record.cache_hit = true;
                         record.finished_at = Some(Utc::now());
                         record.output_ref = Some(snapshot_id.clone());
-                        manifest.stages.push(record);
+                        record_stage(manifest, record);
                         return Ok(snapshot);
                     }
                 }
@@ -527,7 +528,7 @@ async fn stage_zotero_sync(
                         record.cache_hit = true;
                         record.finished_at = Some(Utc::now());
                         record.output_ref = Some(snapshot_id.clone());
-                        manifest.stages.push(record);
+                        record_stage(manifest, record);
                         return Ok(snapshot);
                     }
                 }
@@ -691,7 +692,7 @@ async fn stage_zotero_sync_inner(
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
     record.output_ref = Some(snapshot_id);
-    manifest.stages.push(record);
+    record_stage(manifest, record);
 
     Ok(snapshot)
 }
@@ -797,7 +798,7 @@ async fn stage_source_fetch(
 
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
-    manifest.stages.push(record);
+    record_stage(manifest, record);
 
     Ok(dedup)
 }
@@ -926,6 +927,7 @@ async fn stage_embedding(
     candidates: &[CandidatePaper],
     snapshot: &ZoteroSnapshot,
     date: &str,
+    force: bool,
     event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
     run_id: &str,
 ) -> anyhow::Result<(Vec<(String, Vec<f32>)>, Vec<(String, Vec<f32>, f32)>)> {
@@ -960,7 +962,8 @@ async fn stage_embedding(
         );
         let vec_path = StatePath::new(format!("cache/embeddings/{}.vec", input_hash))?;
 
-        if let Some(bytes) = store.read_bytes(&vec_path)? {
+        let cached_bytes = if force { None } else { store.read_bytes(&vec_path)? };
+        if let Some(bytes) = cached_bytes {
             candidate_embs.push((candidate.paper_id.clone(), bytes_to_vec(&bytes)));
             candidate_hashes.push((candidate.paper_id.clone(), input_hash));
         } else {
@@ -998,7 +1001,8 @@ async fn stage_embedding(
             );
             let vec_path = StatePath::new(format!("cache/embeddings/{}.vec", input_hash))?;
 
-            if let Some(bytes) = store.read_bytes(&vec_path)? {
+            let cached_bytes = if force { None } else { store.read_bytes(&vec_path)? };
+            if let Some(bytes) = cached_bytes {
                 library_embs.push((pref.library_id.clone(), bytes_to_vec(&bytes), pref.weight));
                 library_hashes.push((pref.library_id.clone(), pref.weight, input_hash));
             } else {
@@ -1107,7 +1111,7 @@ async fn stage_embedding(
 
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
-    manifest.stages.push(record);
+    record_stage(manifest, record);
 
     Ok((candidate_embs, library_embs))
 }
@@ -1292,7 +1296,7 @@ async fn stage_rerank(
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
     record.output_ref = Some(selection.selection_id.clone());
-    manifest.stages.push(record);
+    record_stage(manifest, record);
 
     Ok((selection, scores))
 }
@@ -1686,7 +1690,7 @@ async fn stage_deep_read(
     };
     record.finished_at = Some(Utc::now());
     record.output_ref = Some(paper_ids_str);
-    manifest.stages.push(record);
+    record_stage(manifest, record);
 
     Ok(read_results)
 }
@@ -1814,7 +1818,7 @@ async fn stage_render(
 
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
-    manifest.stages.push(record);
+    record_stage(manifest, record);
 
     Ok((
         store
@@ -1885,7 +1889,7 @@ async fn stage_send(
             record.status = StageStatus::Succeeded;
             record.cache_hit = true;
             record.finished_at = Some(Utc::now());
-            manifest.stages.push(record);
+            record_stage(manifest, record);
             return Ok(());
         }
     }
@@ -1919,7 +1923,7 @@ async fn stage_send(
 
     record.status = StageStatus::Succeeded;
     record.finished_at = Some(Utc::now());
-    manifest.stages.push(record);
+    record_stage(manifest, record);
 
     Ok(())
 }
@@ -1983,6 +1987,12 @@ pub(crate) fn build_cli_overrides(args: &RunArgs) -> Vec<CliOverride> {
     if args.force_zotero_sync {
         overrides.push(CliOverride {
             key: "force_zotero_sync".into(),
+            value: "true".into(),
+        });
+    }
+    if args.force_embedding {
+        overrides.push(CliOverride {
+            key: "force_embedding".into(),
             value: "true".into(),
         });
     }
@@ -2144,16 +2154,23 @@ fn bytes_to_vec(bytes: &[u8]) -> Vec<f32> {
 }
 
 fn skip_stage(manifest: &mut RunManifest, stage: StageName) {
-    manifest.stages.push(StageRecord {
-        stage,
-        status: StageStatus::Skipped,
-        started_at: Utc::now(),
-        finished_at: Some(Utc::now()),
-        cache_hit: false,
-        input_hash: None,
-        output_ref: None,
-        error: None,
-    });
+    record_stage(
+        manifest,
+        StageRecord {
+            stage,
+            status: StageStatus::Skipped,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            cache_hit: false,
+            input_hash: null_or_none(),
+            output_ref: None,
+            error: None,
+        },
+    );
+}
+
+fn null_or_none() -> Option<String> {
+    None
 }
 
 fn mark_stage_blocked(manifest: &mut RunManifest, message: &str) {
@@ -2198,14 +2215,42 @@ pub(crate) fn classify_error(e: &anyhow::Error) -> ErrorKind {
     }
 }
 
+pub(crate) fn record_stage(manifest: &mut RunManifest, record: StageRecord) {
+    if let Some(existing) = manifest.stages.iter_mut().find(|s| s.stage == record.stage) {
+        *existing = record;
+    } else {
+        manifest.stages.push(record);
+    }
+}
+
 // ── Pipeline event helpers ───────────────────────────────────────────
 
 fn emit_event(
     event_tx: Option<&tokio::sync::broadcast::Sender<PipelineEvent>>,
+    manifest: &mut RunManifest,
+    store: &FileStateStore,
+    manifest_path: &StatePath,
     run_id: &str,
     stage: StageName,
     _is_start: bool,
 ) {
+    if !manifest.stages.iter().any(|s| s.stage == stage) {
+        record_stage(
+            manifest,
+            StageRecord {
+                stage: stage.clone(),
+                status: StageStatus::Running,
+                started_at: Utc::now(),
+                finished_at: None,
+                cache_hit: false,
+                input_hash: None,
+                output_ref: None,
+                error: None,
+            },
+        );
+        let _ = store.write_json(manifest_path, manifest);
+    }
+
     if let Some(tx) = event_tx {
         let _ = tx.send(PipelineEvent::StageStart {
             run_id: run_id.to_string(),
