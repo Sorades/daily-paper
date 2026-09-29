@@ -10,246 +10,363 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{title}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/700.css">
 <style>
 :root {
-  --bg: #ffffff;
-  --card-bg: #ffffff;
-  --card-border: #e5e7eb;
-  --text: #111827;
-  --text-dim: #6b7280;
-  --text-faint: #9ca3af;
-  --accent: #4f46e5;
-  --accent-soft: #eef2ff;
-  --score-high: #059669;
-  --score-mid: #d97706;
-  --score-low: #dc2626;
+  --bg: #faf9f5;
+  --text: #191816;
+  --text-muted: #5e5b54;
+  --text-faint: #8a867e;
+  --line-strong: #191816;
+  --line-light: #e6e4dc;
+
+  --coral: #cc785c;
+  --coral-soft: #f4ebe6;
+
+  --score-high: #246a48;
+  --score-mid: #b8621b;
+  --score-low: #a83836;
+
+  --link-code-text: #24292f;
+  --link-code-border: #8c959f;
+  --link-arxiv-text: #8c2d36;
+  --link-arxiv-border: #d8969c;
+  --link-pdf-text: #2a5a8c;
+  --link-pdf-border: #9ab8d8;
+
+  --insight-wash: #f3efe6;
+
+  --font-serif: "Newsreader", "Charter", "Georgia", "Songti SC", serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-link-maple: "Maple Mono", "Maple Mono SC NF", "JetBrains Mono", monospace;
 }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --text: #ece9e2;
+    --text-muted: #a6a299;
+    --text-faint: #737067;
+    --line-strong: #ece9e2;
+    --line-light: #2c2a26;
+
+    --coral: #d97f62;
+    --coral-soft: #281d19;
+
+    --score-high: #5ec992;
+    --score-mid: #e89b58;
+    --score-low: #e87673;
+
+    --link-code-text: #c9d1d9;
+    --link-code-border: #484f58;
+    --link-arxiv-text: #d66570;
+    --link-arxiv-border: #612228;
+    --link-pdf-text: #6cb0eb;
+    --link-pdf-border: #2b4c6e;
+
+    --insight-wash: #1b1916;
+  }
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg);
   color: var(--text);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  padding-bottom: env(safe-area-inset-bottom, 2.5rem);
 }
+
+.layout {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+
 header {
-  padding: 2.5rem 2rem 1.5rem;
-  border-bottom: 1px solid var(--card-border);
+  padding: 1.25rem 0 0.65rem;
+  border-bottom: 1.5px solid var(--line-strong);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 header h1 {
-  font-size: 1.3rem;
-  font-weight: 600;
+  font-family: var(--font-serif);
+  font-size: 1.6rem;
+  font-weight: 400;
+  letter-spacing: -0.02em;
   color: var(--text);
-  letter-spacing: -0.01em;
 }
-.container {
-  max-width: 820px;
-  margin: 0 auto;
-  padding: 1.2rem 1.2rem 3rem;
+.header-date {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-faint);
 }
-.paper {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  padding: 1.3rem 1.5rem;
-  margin-bottom: 0.8rem;
-  transition: border-color 0.15s;
+
+.paper-item {
+  padding: 1.25rem 0 1.15rem;
+  border-bottom: 1px solid var(--line-light);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
-.paper:hover {
-  border-color: #d1d5db;
+.paper-item:first-of-type {
+  padding-top: 0.85rem;
 }
+.paper-item:last-of-type {
+  border-bottom: 1.5px solid var(--line-strong);
+}
+
 .paper-head {
   display: flex;
-  align-items: flex-start;
-  gap: 0.8rem;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.8rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.76rem;
 }
-.rank {
-  flex-shrink: 0;
-  width: 1.6rem;
-  height: 1.6rem;
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-radius: 5px;
+.head-left {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: baseline;
+  gap: 0.55rem;
+}
+.rank-num {
+  font-family: var(--font-mono);
   font-weight: 700;
-  font-size: 0.75rem;
+  color: var(--text-muted);
 }
-.title {
-  font-size: 1rem;
-  font-weight: 600;
+.score-num {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.score-high { color: var(--score-high); }
+.score-mid  { color: var(--score-mid); }
+.score-low  { color: var(--score-low); }
+
+.head-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-link-maple);
+}
+.link-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  font-weight: 500;
+  border-bottom: 1px solid transparent;
+  transition: all 0.15s;
+  line-height: 1.2;
+}
+.link-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  vertical-align: -1px;
+}
+.link-code {
+  color: var(--link-code-text);
+  font-weight: 500;
+  border-bottom-color: var(--link-code-border);
+}
+.link-arxiv {
+  color: var(--link-arxiv-text);
+  border-bottom-color: var(--link-arxiv-border);
+}
+.link-pdf {
+  color: var(--link-pdf-text);
+  font-weight: 500;
+  border-bottom-color: var(--link-pdf-border);
+}
+.link-btn:hover {
+  filter: brightness(0.85);
+}
+
+.paper-title {
+  font-family: var(--font-serif);
+  font-size: 1.28rem;
+  font-weight: 500;
+  line-height: 1.34;
+  letter-spacing: -0.01em;
   color: var(--text);
-  line-height: 1.45;
+  margin-bottom: 0.3rem;
 }
-.title a {
+.paper-title a {
   color: inherit;
   text-decoration: none;
 }
-.title a:hover {
-  color: var(--accent);
+.paper-title a:hover {
+  color: var(--coral);
 }
-.authors {
-  margin-top: 0.4rem;
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  line-height: 1.5;
+
+.paper-meta {
+  margin-bottom: 0.85rem;
 }
-.affiliations {
-  margin-top: 0.1rem;
-  font-size: 0.72rem;
+.paper-authors {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.paper-affil {
+  font-size: 0.75rem;
   color: var(--text-faint);
-}
-.meta-bar {
-  margin-top: 0.5rem;
-  padding: 0.4rem 0;
-}
-.meta-bar .authors {
-  margin-top: 0;
-}
-.meta-bar .affiliations {
+  font-style: italic;
   margin-top: 0.1rem;
 }
-.meta-row {
+
+.featured-insight {
+  background: var(--insight-wash);
+  border-left: 2.5px solid var(--coral);
+  padding: 0.65rem 0.85rem;
+  border-radius: 0 4px 4px 0;
+  margin-bottom: 0.85rem;
+}
+.insight-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--coral);
+  margin-bottom: 0.25rem;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.4rem;
-  flex-wrap: wrap;
+  gap: 0.35rem;
 }
-.chip {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.72rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  gap: 0.25rem;
-  text-decoration: none;
-  transition: all 0.15s;
+.insight-label::before {
+  content: "—";
 }
-.chip-arxiv {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.chip-arxiv:hover {
-  background: #e0e7ff;
-  color: var(--accent);
-}
-.chip-pdf {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-.chip-pdf:hover {
-  background: #fee2e2;
-}
-.chip-score {
-  font-weight: 600;
-}
-.chip-score-high { background: #ecfdf5; color: var(--score-high); }
-.chip-score-mid  { background: #fffbeb; color: var(--score-mid); }
-.chip-score-low  { background: #fef2f2; color: var(--score-low); }
-.chip-proj {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.chip-proj:hover { background: #e0e7ff; }
-.summary {
-  margin-top: 0.6rem;
-  border-left: 2px solid #d0d5dd;
-  padding-left: 0.6rem;
-  font-size: 0.82rem;
+.insight-body {
+  font-family: var(--font-serif);
+  font-size: 0.98rem;
   line-height: 1.55;
+  color: var(--text);
 }
-.summary-block {
-  padding: 0.25rem 0;
+
+.paper-details {
+  display: grid;
+  gap: 0.55rem;
+  padding-left: 0.75rem;
+  border-left: 1.5px solid var(--line-light);
 }
-.summary-tag {
+
+.detail-row {
+  line-height: 1.58;
+  font-size: 0.84rem;
+}
+
+.detail-label {
   display: inline-block;
-  min-width: 5rem;
+  width: max-content;
+  min-width: 5.4rem;
   white-space: nowrap;
-  font-size: 0.68rem;
-  font-weight: 600;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  text-align: right;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 0.70rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0.1rem 0.4rem;
-  border-radius: 3px;
-  text-align: center;
-  vertical-align: middle;
-  margin-right: 0.4rem;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: linear-gradient(180deg, transparent 55%, rgba(204, 120, 92, 0.22) 55%);
+  padding-right: 0.25rem;
+  padding-left: 0.2rem;
+  margin-right: 0.5rem;
+  vertical-align: baseline;
 }
-.tag-problem  { background: #fef3c7; color: #92400e; }
-.tag-insight  { background: #dbeafe; color: #1e40af; }
-.tag-method   { background: #e0e7ff; color: #3730a3; }
-.tag-results  { background: #d1fae5; color: #065f46; }
-.tag-limitation { background: #fce7d5; color: #9a3412; }
-.tag-tldr { background: #f3f4f6; color: #374151; }
-.summary-text {
-  color: #374151;
+@media (prefers-color-scheme: dark) {
+  .detail-label {
+    background: linear-gradient(180deg, transparent 55%, rgba(217, 127, 98, 0.35) 55%);
+  }
 }
-.notable {
-  margin-top: 0.4rem;
+.detail-text {
+  color: var(--text);
+  display: inline;
+}
+
+.notable-authors {
+  margin-top: 0.55rem;
   font-size: 0.75rem;
   color: var(--text-faint);
 }
-.notable span { color: var(--text-dim); }
+.notable-authors span {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 footer {
   text-align: center;
-  padding: 2rem 1rem;
+  padding: 2rem 0 1.2rem;
   color: var(--text-faint);
-  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
 }
+
 @media (max-width: 640px) {
+  .layout {
+    padding: 0 0.75rem;
+  }
   header {
-    padding: 1rem 0.75rem 0.75rem;
+    padding: 0.9rem 0 0.5rem;
   }
-  .container {
-    padding: 0.6rem 0.6rem 1.5rem;
+  header h1 {
+    font-size: 1.35rem;
   }
-  .paper {
-    padding: 0.8rem;
-    margin-bottom: 0.6rem;
+  .paper-item {
+    padding: 0.95rem 0 0.85rem;
   }
-  .paper-head {
-    gap: 0.5rem;
+  .paper-item:first-of-type {
+    padding-top: 0.7rem;
   }
-  .rank {
-    width: 1.3rem;
-    height: 1.3rem;
-    font-size: 0.65rem;
+  .paper-title {
+    font-size: 1.1rem;
+    line-height: 1.32;
   }
-  .title {
-    font-size: 0.9rem;
+  .featured-insight {
+    padding: 0.55rem 0.75rem;
+    margin-bottom: 0.75rem;
   }
-  .meta-row {
-    gap: 0.35rem;
+  .insight-body {
+    font-size: 0.92rem;
+    line-height: 1.5;
   }
-  .chip {
-    padding: 0.1rem 0.35rem;
-    font-size: 0.65rem;
+  .paper-details {
+    padding-left: 0.6rem;
+    gap: 0.45rem;
   }
-  .summary {
-    margin-top: 0.4rem;
-    padding-left: 0.4rem;
-    font-size: 0.78rem;
+  .detail-row {
+    font-size: 0.82rem;
+    line-height: 1.55;
   }
-  .summary-tag {
-    min-width: 3.5rem;
-    font-size: 0.58rem;
-    padding: 0.08rem 0.3rem;
+  .head-links {
+    gap: 0.55rem;
   }
 }
 </style>
 </head>
 <body>
+<div class="layout">
 <header>
   <h1>{{title}}</h1>
+  <span class="header-date">{{generated_at}}</span>
 </header>
-<div class="container">
+<main>
 {{papers}}
-</div>
+</main>
 <footer>daily-paper · {{generated_at}} · {{run_id}}</footer>
+</div>
 </body>
 </html>"#;
 
@@ -291,9 +408,11 @@ fn label_to_tag_class(label: &str) -> &'static str {
 
 /// Format structured summary text into HTML.
 ///
-/// Converts "**Label**: text" blocks into flex rows with fixed-width tags.
+/// Separates "Insight" into a featured pull-quote if present, followed by detail rows.
 fn format_summary_html(summary: &str) -> String {
-    let mut html = String::new();
+    let mut insight_html = String::new();
+    let mut details_html = String::new();
+
     for block in summary.split("\n\n") {
         let block = block.trim();
         if block.is_empty() {
@@ -304,20 +423,34 @@ fn format_summary_html(summary: &str) -> String {
             let label = label_part.trim_matches('*').trim();
             let text = &rest[2..]; // skip ": "
             let tag_class = label_to_tag_class(label);
-            html.push_str(&format!(
-                r#"<div class="summary-block"><span class="summary-tag {tag_class}">{label}</span><span class="summary-text">{text}</span></div>"#,
-                tag_class = tag_class,
-                label = escape_html(label),
-                text = escape_html(text),
-            ));
+            let escaped_label = escape_html(label);
+            let escaped_text = escape_html(text);
+
+            if label.eq_ignore_ascii_case("insight") {
+                insight_html = format!(
+                    r#"<div class="featured-insight"><div class="insight-label">{escaped_label}</div><div class="insight-body summary-text {tag_class}">{escaped_text}</div></div>"#
+                );
+            } else {
+                details_html.push_str(&format!(
+                    r#"<div class="detail-row"><span class="detail-label summary-tag {tag_class}">{escaped_label}</span><span class="detail-text summary-text">{escaped_text}</span></div>"#
+                ));
+            }
         } else {
-            html.push_str(&format!(
-                r#"<div class="summary-block"><span class="summary-text">{}</span></div>"#,
-                escape_html(block)
+            let escaped_block = escape_html(block);
+            details_html.push_str(&format!(
+                r#"<div class="detail-row"><span class="detail-text summary-text">{escaped_block}</span></div>"#
             ));
         }
     }
-    html
+
+    let mut result = String::new();
+    if !insight_html.is_empty() {
+        result.push_str(&insight_html);
+    }
+    if !details_html.is_empty() {
+        result.push_str(&format!(r#"<div class="paper-details">{details_html}</div>"#));
+    }
+    result
 }
 
 /// Render HTML for a single paper.
@@ -357,7 +490,7 @@ fn render_paper_html(paper: &ReportPaper) -> String {
         String::new()
     } else {
         format!(
-            r#"<div class="affiliations">{}</div>"#,
+            r#"<div class="paper-affil">{}</div>"#,
             escape_html(&affs.join(" · "))
         )
     };
@@ -375,91 +508,96 @@ fn render_paper_html(paper: &ReportPaper) -> String {
         escape_html(&paper.title)
     };
 
-    // Score chip
+    // Score class
     let score_cls = if paper.score >= 0.7 {
-        "chip-score-high"
+        "score-high"
     } else if paper.score >= 0.4 {
-        "chip-score-mid"
+        "score-mid"
     } else {
-        "chip-score-low"
+        "score-low"
     };
-    let score_chip = format!(
-        r#"<span class="chip chip-score {score_cls}">{}</span>"#,
-        format_score(paper.score)
-    );
 
-    // Meta chips: score + arXiv ID + PDF
-    let mut chips = vec![score_chip];
-    if let Some(arxiv_id) = extract_arxiv_id(&paper.paper_id) {
-        chips.push(format!(
-            r#"<a class="chip chip-arxiv" href="https://arxiv.org/abs/{}">{}</a>"#,
-            arxiv_id, arxiv_id
-        ));
-        chips.push(format!(
-            r#"<a class="chip chip-pdf" href="https://arxiv.org/pdf/{}">PDF</a>"#,
-            arxiv_id
-        ));
-    } else {
-        if let Some(url) = &paper.landing_url {
-            chips.push(format!(
-                r#"<a class="chip chip-arxiv" href="{url}">Paper</a>"#
+    // Meta links: Order is Code ↗ -> arXiv ID -> PDF ↗
+    let mut links = Vec::new();
+
+    // 1. Project / code links
+    let github_icon = r#"<svg class="link-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="M6 14.5c-3 .5-4.5-1.5-4.5-1.5M10 14.5v-2.2c0-.6-.2-1.1-.6-1.5 2-.2 4.1-1 4.1-4.5 0-1-.3-1.8-1-2.5.1-.2.4-1.2-.1-2.5 0 0-.8-.3-2.6.9-.8-.2-1.6-.3-2.4-.3s-1.6.1-2.4.3c-1.8-1.2-2.6-.9-2.6-.9-.5 1.3-.2 2.3-.1 2.5-.7.7-1 1.5-1 2.5 0 3.5 2.1 4.3 4.1 4.5-.3.3-.5.8-.5 1.5v2.2"></path></svg>"#;
+    if let Some(ref result) = paper.read_result {
+        if let Some(ref url) = result.metadata.code_url {
+            links.push(format!(
+                r#"<a class="link-btn link-code" href="{url}">{github_icon}Code ↗</a>"#
             ));
-        }
-        if let Some(url) = &paper.pdf_url {
-            chips.push(format!(r#"<a class="chip chip-pdf" href="{url}">PDF</a>"#));
+        } else if let Some(ref url) = result.metadata.project_url {
+            links.push(format!(
+                r#"<a class="link-btn link-code" href="{url}">{github_icon}Project ↗</a>"#
+            ));
         }
     }
 
-    // Project / code links as chips
-    if let Some(ref result) = paper.read_result {
-        if let Some(ref url) = result.metadata.project_url {
-            chips.push(format!(
-                r#"<a class="chip chip-proj" href="{url}">Project</a>"#
-            ));
-        }
-        if let Some(ref url) = result.metadata.code_url {
-            chips.push(format!(
-                r#"<a class="chip chip-proj" href="{url}">Code</a>"#
-            ));
-        }
+    // 2. arXiv link
+    let arxiv_icon = r#"<svg class="link-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3.8423 0a1.0037 1.0037 0 0 0-.922.6078c-.1536.3687-.0438.6275.2938 1.1113l6.9185 8.3597-1.0223 1.1058a1.0393 1.0393 0 0 0 .003 1.4229l1.2292 1.3135-5.4391 6.4444c-.2803.299-.4538.823-.2971 1.1986a1.0253 1.0253 0 0 0 .9585.635.9133.9133 0 0 0 .6891-.3405l5.783-6.126 7.4902 8.0051a.8527.8527 0 0 0 .6835.2597.9575.9575 0 0 0 .8777-.6138c.1577-.377-.017-.7502-.306-1.1407l-7.0518-8.3418 1.0632-1.13a.9626.9626 0 0 0 .0089-1.3165L4.6336.4639s-.3733-.4535-.768-.463zm0 .272h.0166c.2179.0052.4874.2715.5644.3639l.005.006.0052.0055 10.169 10.9905a.6915.6915 0 0 1-.0072.945l-1.0666 1.133-1.4982-1.7724-8.5994-10.39c-.3286-.472-.352-.6183-.2592-.841a.7307.7307 0 0 1 .6704-.4401Zm14.341 1.5701a.877.877 0 0 0-.6554.2418l-5.6962 6.1584 1.6944 1.8319 5.3089-6.5138c.3251-.4335.479-.6603.3247-1.0292a1.1205 1.1205 0 0 0-.9763-.689zm-7.6557 12.2823 1.3186 1.4135-5.7864 6.1295a.6494.6494 0 0 1-.4959.26.7516.7516 0 0 1-.706-.4669c-.1119-.2682.0359-.6864.2442-.9083l.0051-.0055.0047-.0055z"/></svg>"#;
+    if let Some(arxiv_id) = extract_arxiv_id(&paper.paper_id) {
+        links.push(format!(
+            r#"<a class="link-btn link-arxiv" href="https://arxiv.org/abs/{arxiv_id}">{arxiv_icon}{arxiv_id}</a>"#
+        ));
+    } else if let Some(url) = &paper.landing_url {
+        links.push(format!(
+            r#"<a class="link-btn link-arxiv" href="{url}">{arxiv_icon}Paper</a>"#
+        ));
+    }
+
+    // 3. PDF link
+    let pdf_icon = r#"<svg class="link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M10 9H8" /><path d="M16 13H8" /><path d="M16 17H8" /></svg>"#;
+    if let Some(arxiv_id) = extract_arxiv_id(&paper.paper_id) {
+        links.push(format!(
+            r#"<a class="link-btn link-pdf" href="https://arxiv.org/pdf/{arxiv_id}">{pdf_icon}PDF ↗</a>"#
+        ));
+    } else if let Some(url) = &paper.pdf_url {
+        links.push(format!(
+            r#"<a class="link-btn link-pdf" href="{url}">{pdf_icon}PDF ↗</a>"#
+        ));
     }
 
     html.push_str(&format!(
-        r#"<div class="paper">
+        r#"<article class="paper-item">
   <div class="paper-head">
-    <div class="rank">{rank}</div>
-    <div class="title">{title}</div>
+    <div class="head-left">
+      <span class="rank-num">#{rank}</span>
+      <span class="score-num {score_cls}">{score}</span>
+    </div>
+    <div class="head-links">
+      {links}
+    </div>
   </div>
-  <div class="meta-bar">
-    <div class="authors">{authors}</div>
+  <h2 class="paper-title">{title}</h2>
+  <div class="paper-meta">
+    <div class="paper-authors">{authors}</div>
     {aff}
-    <div class="meta-row">{chips}</div>
   </div>
 "#,
         rank = paper.rank,
+        score = format_score(paper.score),
+        score_cls = score_cls,
+        links = links.join("\n      "),
         title = title_html,
         authors = authors_line,
         aff = aff_html,
-        chips = chips.join("\n    "),
     ));
 
     // Summary
     if let Some(result) = &paper.read_result {
-        html.push_str(&format!(
-            r#"  <div class="summary">{}</div>"#,
-            format_summary_html(&result.summary)
-        ));
+        html.push_str(&format_summary_html(&result.summary));
         if !result.metadata.notable_authors.is_empty() {
             html.push_str(&format!(
-                r#"  <div class="notable"><span>Notable:</span> {}</div>"#,
+                r#"<div class="notable-authors"><span>Notable:</span> {}</div>"#,
                 escape_html(&result.metadata.notable_authors.join(", "))
             ));
         }
     } else {
-        html.push_str(r#"  <div class="summary"><em>Summary not available.</em></div>"#);
+        html.push_str(r#"<div class="paper-details"><div class="detail-row"><span class="detail-text" style="color: var(--text-faint); font-style: italic;">Summary not available.</span></div></div>"#);
     }
 
-    html.push_str("</div>\n");
+    html.push_str("</article>\n");
     html
 }
 
