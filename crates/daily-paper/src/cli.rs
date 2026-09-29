@@ -117,6 +117,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub force_zotero_sync: bool,
 
+    /// Force embedding calculation, ignoring cached .vec files
+    #[arg(long)]
+    pub force_embedding: bool,
+
     /// Force rerank, ignoring cache
     #[arg(long)]
     pub force_rerank: bool,

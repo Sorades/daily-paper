@@ -13,4 +13,7 @@ export default defineConfig({
       '/report': 'http://localhost:8991',
     },
   },
+  preview: {
+    allowedHosts: ['dev-paper.um580d.sorades.com'],
+  },
 })

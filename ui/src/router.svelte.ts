@@ -42,7 +42,12 @@ export function getRoute(): Route {
 }
 
 export function navigate(hash: string): void {
-  location.hash = hash
+  const normalized = hash.startsWith('#') ? hash : `#${hash}`
+  if (location.hash === normalized) {
+    current = parseHash(normalized)
+  } else {
+    location.hash = normalized
+  }
 }
 
 window.addEventListener('hashchange', () => {

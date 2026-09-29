@@ -136,6 +136,7 @@ export interface RunRequest {
   date?: string
   dry_run?: boolean
   force_zotero_sync?: boolean
+  force_embedding?: boolean
   force_rerank?: boolean
   force_read?: boolean
   force_send?: boolean

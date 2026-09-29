@@ -1,60 +1,123 @@
 <script lang="ts">
-  import type { RunStatus, StageStatus } from '../types'
+  import Icon from './Icon.svelte'
 
   interface Props {
-    status: RunStatus | StageStatus | string
+    status: string
+    size?: 'sm' | 'md'
+    pulse?: boolean
   }
 
-  let { status }: Props = $props()
+  let { status, size = 'md', pulse = false }: Props = $props()
 
-  const colorMap: Record<string, string> = {
-    Running: 'running',
-    Succeeded: 'success',
-    Failed: 'failed',
-    Blocked: 'warning',
-    Cancelled: 'warning',
-    Pending: 'pending',
-    Skipped: 'pending',
-  }
+  const normalized = $derived(status.toLowerCase())
 
-  let cls = $derived(colorMap[status] ?? 'pending')
+  const config = $derived.by(() => {
+    switch (normalized) {
+      case 'running':
+        return { label: 'Running', cls: 'badge-running', dot: true, icon: null }
+      case 'succeeded':
+      case 'success':
+        return { label: 'Succeeded', cls: 'badge-success', dot: false, icon: 'check' as const }
+      case 'failed':
+      case 'error':
+        return { label: 'Failed', cls: 'badge-failed', dot: false, icon: 'alert' as const }
+      case 'blocked':
+      case 'cancelled':
+        return { label: status, cls: 'badge-warning', dot: false, icon: 'alert' as const }
+      case 'skipped':
+        return { label: 'Skipped', cls: 'badge-skipped', dot: false, icon: null }
+      case 'pending':
+      default:
+        return { label: status || 'Pending', cls: 'badge-pending', dot: false, icon: null }
+    }
+  })
 </script>
 
-<span class="badge {cls}">{status}</span>
+<span class="badge {config.cls} {size}">
+  {#if config.dot || pulse || normalized === 'running'}
+    <span class="pulse-dot"></span>
+  {:else if config.icon}
+    <Icon name={config.icon} size={size === 'sm' ? 12 : 13} />
+  {/if}
+  <span>{config.label}</span>
+</span>
 
 <style>
   .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-weight: 500;
-    line-height: 1.4;
+    line-height: 1;
+    border-radius: var(--radius-full);
     white-space: nowrap;
+    border: 1px solid transparent;
+    user-select: none;
+    letter-spacing: 0.01em;
   }
 
-  .running {
-    background: #dbeafe;
-    color: #1e40af;
+  .badge.sm {
+    padding: 3px 8px;
+    font-size: 11px;
   }
 
-  .success {
-    background: #dcfce7;
-    color: #166534;
+  .badge.md {
+    padding: 4px 10px;
+    font-size: 12px;
   }
 
-  .failed {
-    background: #fee2e2;
-    color: #991b1b;
+  .badge-running {
+    background: var(--primary-light);
+    color: var(--primary-text);
+    border-color: var(--primary-border);
   }
 
-  .warning {
-    background: #fef3c7;
-    color: #92400e;
+  .badge-success {
+    background: var(--success-light);
+    color: var(--success-text);
+    border-color: var(--success-border);
   }
 
-  .pending {
+  .badge-failed {
+    background: var(--danger-light);
+    color: var(--danger-text);
+    border-color: var(--danger-border);
+  }
+
+  .badge-warning {
+    background: var(--warning-light);
+    color: var(--warning-text);
+    border-color: var(--warning-border);
+  }
+
+  .badge-skipped {
     background: var(--bg-tertiary);
+    color: var(--text-tertiary);
+    border-color: var(--border);
+  }
+
+  .badge-pending {
+    background: var(--bg-secondary);
     color: var(--text-secondary);
+    border-color: var(--border);
+  }
+
+  .pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.4;
+      transform: scale(0.85);
+    }
   }
 </style>
