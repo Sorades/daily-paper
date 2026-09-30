@@ -1,8 +1,17 @@
-[workspace]
-resolver = "2"
-members = ["crates/*"]
+[package]
+name = "daily-paper"
+version = "0.1.1"
+edition = "2021"
 
-[workspace.dependencies]
+[lib]
+name = "daily_paper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "daily-paper"
+path = "src/main.rs"
+
+[dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 serde = { version = "1", features = ["derive"] }
@@ -18,13 +27,17 @@ clap = { version = "4", features = ["derive"] }
 directories = "6"
 hex = "0.4"
 fastrand = "2"
-tempfile = "3"
 urlencoding = "2"
 quick-xml = "0.36"
 regex = "1"
 lettre = { version = "0.11", features = ["smtp-transport", "builder"] }
-fastembed = "4"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 futures-util = "0.3"
+async-stream = "0.3"
 indicatif = "0.17"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
+tokio = { version = "1", features = ["test-util"] }

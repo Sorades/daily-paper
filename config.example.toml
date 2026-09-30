@@ -27,7 +27,11 @@ include_cross_list = false
 # max_pages = 3
 
 [embedding]
-# kind: "openai-compatible" 或 "fastembed"
+# kind: "openai-compatible" (支持 OpenAI、Ollama、vLLM、SiliconFlow 等任意兼容服务)
+# 例如使用 Ollama 本地模型:
+# base_url = "http://localhost:11434/v1"
+# api_key = "ollama"
+# model = "nomic-embed-text"
 kind = "openai-compatible"
 base_url = "https://api.openai.com/v1"
 api_key = "your-openai-api-key"
@@ -36,10 +40,6 @@ batch_size = 64
 timeout_secs = 60
 max_retries = 5
 max_concurrency = 4
-
-# Fastembed 本地嵌入 (kind = "fastembed" 时使用以下默认值):
-# model = "qwen3-embedding:0.6b"
-# batch_size = 64
 
 [reranker]
 kind = "embedding_similarity"

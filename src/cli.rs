@@ -1,0 +1,154 @@
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(
+    name = "daily-paper",
+    version,
+    about = "Daily paper recommendation and deep reading pipeline",
+    // Running `daily-paper` with no subcommand starts the web server + scheduler
+    after_help = "Run without a subcommand to start the web server and scheduler."
+)]
+pub struct Cli {
+    /// Path to data directory (default: ~/.config/daily-paper or ~/.config/daily-paper-dev in dev mode)
+    #[arg(short, long)]
+    pub directory: Option<std::path::PathBuf>,
+
+    /// Override port to listen on (default: from config or 8991)
+    #[arg(long, global = true)]
+    pub port: Option<u16>,
+
+    /// Disable the built-in scheduler (overrides config)
+    #[arg(long, global = true)]
+    pub no_schedule: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Run the full pipeline once (manual)
+    Run(RunArgs),
+    /// Show status of recent runs
+    Status(StatusArgs),
+    /// Manage configuration
+    #[command(subcommand)]
+    Config(ConfigCommands),
+    /// Manage cache
+    #[command(subcommand)]
+    Cache(CacheCommands),
+    /// Manage archive
+    #[command(subcommand)]
+    Archive(ArchiveCommands),
+    /// Manage systemd service
+    #[command(subcommand)]
+    Systemd(SystemdCommands),
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// Show current configuration
+    Show,
+    /// Show config file path
+    Path,
+    /// Initialize configuration file
+    Init,
+}
+
+#[derive(Subcommand)]
+pub enum CacheCommands {
+    /// List cache contents
+    List,
+    /// Clean cache
+    Clean(CacheCleanArgs),
+    /// Show cache size
+    Size,
+}
+
+#[derive(Parser)]
+pub struct CacheCleanArgs {
+    /// Cache type to clean (arxiv, embeddings, papers, rerank, zotero, deliveries, reports, runs, all)
+    #[arg(long, default_value = "all")]
+    pub kind: String,
+}
+
+#[derive(Subcommand)]
+pub enum ArchiveCommands {
+    /// List all archive dates
+    List,
+    /// Show archive details for a specific date
+    Show(ArchiveShowArgs),
+}
+
+#[derive(Parser)]
+pub struct ArchiveShowArgs {
+    /// Date to show (YYYY-MM-DD)
+    pub date: String,
+}
+
+#[derive(Parser)]
+pub struct RunArgs {
+    /// Date to fetch papers for (YYYY-MM-DD)
+    #[arg(long)]
+    pub date: Option<String>,
+
+    /// Run only specific stage(s). Can be repeated.
+    /// Stages: zotero-sync, source-fetch, embedding, rerank, deep-read, render, send
+    #[arg(long = "stage")]
+    pub stages: Vec<String>,
+
+    /// When using --stage, load cached data from this run id (defaults to latest run)
+    #[arg(long)]
+    pub from_run: Option<String>,
+
+    /// Execute pipeline but do not send email (same as default in dev)
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Send the email (dev: off by default; release: on by default)
+    #[arg(long)]
+    pub send_email: bool,
+
+    /// Skip email even in release mode
+    #[arg(long)]
+    pub no_email: bool,
+
+    /// Force Zotero sync, ignoring cache
+    #[arg(long)]
+    pub force_zotero_sync: bool,
+
+    /// Force embedding calculation, ignoring cached .vec files
+    #[arg(long)]
+    pub force_embedding: bool,
+
+    /// Force rerank, ignoring cache
+    #[arg(long)]
+    pub force_rerank: bool,
+
+    /// Force deep read, ignoring cache
+    #[arg(long)]
+    pub force_read: bool,
+
+    /// Force send, even if report was already sent
+    #[arg(long)]
+    pub force_send: bool,
+
+    /// Limit number of candidates to process (for testing)
+    #[arg(long)]
+    pub max_candidates: Option<usize>,
+}
+
+#[derive(Parser)]
+pub struct StatusArgs {
+    /// Show status for a specific run
+    #[arg(long)]
+    pub run_id: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum SystemdCommands {
+    /// Install user-level systemd service
+    Install,
+    /// Remove systemd service
+    Uninstall,
+}
