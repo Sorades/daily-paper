@@ -21,7 +21,6 @@
   const KIND_DESCRIPTIONS: Record<string, string> = {
     arxiv: 'Raw API responses and RSS search results from arXiv',
     embeddings: 'Vector embeddings generated for paper titles and abstracts',
-    models: 'Cached local models or fastembed model weights',
     papers: 'Downloaded source paper preprints and metadata',
     rerank: 'Computed reranker scores and similarity caches',
     zotero: 'Cached Zotero library collections and item attachments',

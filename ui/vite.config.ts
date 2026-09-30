@@ -8,12 +8,17 @@ export default defineConfig({
     outDir: 'dist',
   },
   server: {
+    host: '0.0.0.0',
+    port: 5173,
+    allowedHosts: ['dev-paper.um580d.sorades.com'],
     proxy: {
       '/api': 'http://localhost:8991',
       '/report': 'http://localhost:8991',
     },
   },
   preview: {
+    host: '0.0.0.0',
+    port: 5173,
     allowedHosts: ['dev-paper.um580d.sorades.com'],
   },
 })

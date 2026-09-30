@@ -447,10 +447,9 @@
                   bind:value={parsed.embedding!.kind}
                   onchange={markDirty}
                 >
-                  <option value="openai-compatible">OpenAI 兼容 API</option>
-                  <option value="fastembed">Fastembed (本地 CPU 运行)</option>
+                  <option value="openai-compatible">OpenAI 兼容 API (OpenAI / Ollama / vLLM)</option>
                 </select>
-                <span class="field-hint">本地运行无需额外 API 消耗</span>
+                <span class="field-hint">支持公网 API 或本地 Ollama 等服务</span>
               </div>
 
               <div class="form-field">
@@ -460,39 +459,37 @@
                   type="text"
                   bind:value={parsed.embedding!.model}
                   oninput={markDirty}
-                  placeholder="text-embedding-3-small 或 qwen3-embedding:0.6b"
+                  placeholder="text-embedding-3-small 或 nomic-embed-text"
                 />
-                <span class="field-hint">如 text-embedding-3-small, qwen3-embedding:0.6b</span>
+                <span class="field-hint">如 text-embedding-3-small, bge-m3, nomic-embed-text</span>
               </div>
             </div>
 
-            {#if parsed.embedding!.kind === 'openai-compatible'}
-              <div class="form-grid cols-2" style="margin-top: 14px;">
-                <div class="form-field">
-                  <label for="embed-url">Embedding API Base URL</label>
-                  <input
-                    id="embed-url"
-                    type="text"
-                    bind:value={parsed.embedding!.base_url}
-                    oninput={markDirty}
-                    placeholder="https://api.openai.com/v1 或 http://127.0.0.1:23000/v1"
-                  />
-                  <span class="field-hint">独立配置 Embedding 服务的端点地址</span>
-                </div>
-
-                <div class="form-field">
-                  <label for="embed-key">Embedding API Key</label>
-                  <input
-                    id="embed-key"
-                    type="password"
-                    bind:value={parsed.embedding!.api_key}
-                    oninput={markDirty}
-                    placeholder="sk-..."
-                  />
-                  <span class="field-hint">用于 Embedding 请求的鉴权密钥</span>
-                </div>
+            <div class="form-grid cols-2" style="margin-top: 14px;">
+              <div class="form-field">
+                <label for="embed-url">Embedding API Base URL</label>
+                <input
+                  id="embed-url"
+                  type="text"
+                  bind:value={parsed.embedding!.base_url}
+                  oninput={markDirty}
+                  placeholder="https://api.openai.com/v1 或 http://localhost:11434/v1"
+                />
+                <span class="field-hint">独立配置 Embedding 服务的端点地址</span>
               </div>
-            {/if}
+
+              <div class="form-field">
+                <label for="embed-key">Embedding API Key</label>
+                <input
+                  id="embed-key"
+                  type="password"
+                  bind:value={parsed.embedding!.api_key}
+                  oninput={markDirty}
+                  placeholder="sk-... (Ollama 本地可填 ollama)"
+                />
+                <span class="field-hint">用于 Embedding 请求的鉴权密钥</span>
+              </div>
+            </div>
           </div>
         </section>
 
